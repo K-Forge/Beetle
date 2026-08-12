@@ -2,7 +2,7 @@
 
 **Diagnosticador experto de servidores con inteligencia artificial**
 
-Documento de proyecto — versión 3.0
+Documento de proyecto — versión 4.0
 
 ---
 
@@ -10,9 +10,12 @@ Documento de proyecto — versión 3.0
 
 1. [Ikigai del proyecto](#1-ikigai-del-proyecto)
 2. [Qué es Doctor J/K](#2-qué-es-doctor-jk)
+   - [2.1 Buyer persona](#21-buyer-persona)
+   - [2.2 Qué justifica cada decisión de arquitectura](#22-qué-justifica-cada-decisión-de-arquitectura)
 3. [El problema que resuelve](#3-el-problema-que-resuelve)
 4. [La solución](#4-la-solución)
 5. [Cómo funciona (desarrollo de la idea)](#5-cómo-funciona-desarrollo-de-la-idea)
+   - [5.3 Sanitización de datos sensibles](#53-sanitización-de-datos-sensibles)
 6. [Arquitectura](#6-arquitectura)
 7. [Stack técnico](#7-stack-técnico)
 8. [Qué necesitas antes de empezar](#8-qué-necesitas-antes-de-empezar)
@@ -30,6 +33,7 @@ Documento de proyecto — versión 3.0
 20. [Cronograma](#20-cronograma)
 21. [Comparativa de modelos de IA](#21-comparativa-de-modelos-de-ia)
 22. [Preguntas frecuentes sobre el proyecto](#22-preguntas-frecuentes-sobre-el-proyecto)
+23. [Modelo de producto y distribución](#23-modelo-de-producto-y-distribución)
 
 ---
 
@@ -85,7 +89,22 @@ No es un monitor — es un diagnosticador experto con capacidad de corrección. 
 
 ### Para quién es
 
-Para cualquier persona u organización que opere servidores y quiera:
+**Cliente objetivo: PyME tecnológica sin equipo de infraestructura dedicado.**
+
+Perfil:
+
+- Empresa de 5–50 empleados, 1–5 años de operación
+- Equipo de infraestructura de 1–3 personas (a veces cero dedicadas — el CTO o fundador técnico es quien apaga los incendios)
+- 3–10 servidores Linux (Ubuntu/Debian), típicamente VPS de terceros: DigitalOcean, Hetzner, Linode, o instancias en AWS/Azure/GCP. "Servidor" significa cualquier instancia Linux que requiera vigilancia, sea física o virtual
+- Verticales: SaaS, edtech, e-commerce propio
+- Mercados: LATAM, Europa del Sur, Sudeste Asiático — donde herramientas enterprise como Datadog ($2,000+/mes) son desproporcionadas frente al presupuesto local
+- Sin rotación formal de guardia: "el que esté despierto responde"
+- Monitoreo existente parcial (Grafana a medias, alertas sin terminar de configurar)
+- Presupuesto de herramientas de infraestructura: $0–200/mes
+
+Decisor de compra: CTO, fundador técnico o el único administrador de sistemas. 28–45 años, formación en ingeniería de sistemas o autodidacta equivalente. Decide en un día: lo prueba él mismo, y si funciona lo instala esa semana. Sin procurement.
+
+Este cliente quiere:
 
 - **Reducir el tiempo de respuesta ante incidentes** — de 45 minutos a menos de 2 minutos
 - **Entender qué pasó sin ser experto en infraestructura** — el informe explica en lenguaje accesible
@@ -93,11 +112,39 @@ Para cualquier persona u organización que opere servidores y quiera:
 - **Mantener o mejorar la disponibilidad del servicio** — la diferencia entre 99.9% y 99.99% es la diferencia entre 8.7 horas de caída al año y 52 minutos
 - **Reducir costos operativos** — un incidente resuelto automáticamente a las 3am cuesta centavos en tokens de IA; un ingeniero despertado cuesta $40–150/hora
 
+Un segmento queda deliberadamente fuera de alcance: empresas medianas (50–500 empleados, 20–200 servidores, equipos de 5–20 ingenieros con rotación formal de guardia). Ese cliente requiere vista centralizada, historial consultable, control de acceso y evidencia de compliance — todo fuera del alcance actual. Se menciona como dirección de expansión futura, no como cliente presente.
+
 ### Qué NO es
 
 - No es un reemplazo del monitoreo (Datadog, Grafana). Los complementa — ellos miden, Doctor J/K diagnostica y resuelve.
 - No es un sistema de auto-healing opaco. Cuando Doctor J/K corrige, deja un registro completo de qué hizo y por qué — auditable, reversible, transparente.
 - No es un chatbot. Es un agente autónomo que actúa cuando se dispara un error, sin que nadie tenga que escribirle.
+
+### 2.1 Buyer persona
+
+> Mateo, 32 años, CTO y fundador técnico de una startup SaaS de 15 personas en Bogotá. Tres años de operación, equipo 100% remoto. Es también, de facto, el único que sabe leer un log de PostgreSQL cuando algo se cae.
+>
+> Corre todo sobre VPS Linux porque AWS le sale caro. Tiene Grafana instalado a medias — nunca terminó de configurar las alertas importantes. Cuando algo se rompe a las 3am, es él quien se despierta. No hay PagerDuty, no hay rotación.
+>
+> **Qué quiere:** dormir tranquilo sin ignorar producción. No busca otra herramienta de observabilidad — ya tiene Grafana a medias y no quiere reemplazarla. Busca algo que le diga *qué hacer* cuando la alarma suena, no otra alarma más.
+>
+> **Sus objeciones:**
+> - "¿Esto manda mis logs a algún lado?" — necesita saber exactamente qué sale de su servidor
+> - "No tengo tiempo de configurar nada complicado" — si la instalación pasa de 15 minutos, lo abandona
+> - "¿Y si el modelo se equivoca y me manda a borrar algo?" — por eso el Modo 1 es la puerta de entrada obligatoria
+>
+> **Cómo decide:** lo prueba él mismo en un servidor de pruebas. Si funciona, va a producción esa semana. Sin comité, sin procurement.
+
+### 2.2 Qué justifica cada decisión de arquitectura
+
+| Decisión | Por qué, dado este cliente |
+|---|---|
+| Agente instalado localmente, no servicio remoto | Con 3–10 servidores no hace falta orquestación central |
+| Informes en `.md` en disco, sin base de datos | Mateo lee el informe y actúa; no necesita historial consultable |
+| Instalación en menos de 15 minutos | Su restricción real es tiempo, no dinero |
+| Kimi K2.6 vía Cloudflare | Costo de inferencia cercano a cero, asumido por Beetle |
+| Modo 1 (solo diagnostica) por defecto | Necesita confiar antes de permitir que el agente actúe |
+| Sanitización antes del envío | Sus logs contienen IPs internas, rutas y a veces credenciales |
 
 ---
 
@@ -152,9 +199,9 @@ La persona lee el informe y decide si sigue los pasos.
 
 Además del informe, el agente identifica el *tipo* de incidente y ejecuta un script de corrección que el equipo escribió y probó de antemano. No improvisa — siempre corre el mismo script probado para el mismo tipo de problema. Es predecible, auditable, y seguro. Cubre los tipos conocidos de incidente.
 
-### Modo 3 — Remediador Automático (fase beta)
+### Modo 3 — Remediador Automático
 
-El modelo no solo diagnostica sino que genera un plan de corrección específico para ese incidente particular, y el agente lo ejecuta paso a paso con validación. Más flexible que el Modo 2 (cubre incidentes que no tienen script preescrito) pero requiere más salvaguardas. Se detalla en la sección 14.
+El modelo no solo diagnostica sino que genera un plan de corrección específico para ese incidente particular, y el agente lo ejecuta paso a paso con validación. Más flexible que el Modo 2 (cubre incidentes que no tienen script preescrito) pero requiere más salvaguardas. Es diferenciador comercial central del producto, no una fase experimental — su alcance obligatorio y sus salvaguardas se detallan en la sección 14.
 
 ```
 Vigilancia  →  Detección  →  Recolección  →  Diagnóstico  →  Corrección
@@ -199,11 +246,31 @@ Al disparar un incidente, el agente recorta una ventana temporal alrededor del e
 
 El punto 5 permite que el sistema detecte patrones: si la máquina ya tuvo tres incidentes de disco, el modelo lo sabe.
 
-### 5.3 La fase de diagnóstico
+### 5.3 Sanitización de datos sensibles
+
+Antes de que la evidencia salga del servidor, pasa por `sanitizador.py`: un módulo que corre entre el recolector y el cliente LLM y enmascara datos sensibles mediante expresiones regulares.
+
+**Qué enmascara:**
+
+| Patrón detectado | Reemplazo |
+|---|---|
+| Direcciones IP | `[IP_1]`, `[IP_2]` (consistente dentro del mismo informe) |
+| Variables con PASSWORD, SECRET, KEY, TOKEN en el nombre | `[REDACTADO]` |
+| Tokens tipo Bearer / JWT | `[TOKEN_REDACTADO]` |
+| Rutas con nombre de usuario (`/home/usuario/...`) | `/home/[USUARIO]/...` |
+| Claves SSH y rutas a archivos de credenciales | `[REDACTADO]` |
+
+**Por qué el diagnóstico no se degrada:** el modelo puede razonar igual sobre `[IP_1]` que sobre la IP real — lo que importa para el diagnóstico es la relación entre eventos, no el valor literal. La consistencia del reemplazo dentro de un mismo informe preserva la capacidad de correlacionar ("las conexiones desde `[IP_1]` fueron rechazadas repetidamente").
+
+**Limitación honesta:** la sanitización por patrones no es exhaustiva. Un dato sensible con formato inesperado puede escaparse. Cubre los casos comunes y verificables, no garantiza cobertura total.
+
+La evidencia cruda (sin sanitizar) queda guardada localmente junto al informe, para que quien opere el servidor pueda inspeccionar exactamente qué se generó y qué versión sanitizada salió.
+
+### 5.4 La fase de diagnóstico
 
 La evidencia se envía a Kimi K2.6 (vía Cloudflare Workers AI, gratis) con un prompt estructurado. Kimi lee la evidencia y genera el informe con diagnóstico + guía de solución. El modelo **no toca el servidor** — solo recibe texto y devuelve texto.
 
-### 5.4 Cómo se comunica el agente con Kimi
+### 5.5 Cómo se comunica el agente con Kimi
 
 No se descarga el modelo. No se instala. No corre en tu infraestructura. Es una petición HTTP:
 
@@ -249,6 +316,9 @@ DOCTORJK_LLM_API_KEY=...
 │  │  │+ trigger │  └──────────┘  └────┬─────┘ │      │
 │  │  │  bash    │                     │       │      │
 │  │  └──────────┘               ┌─────▼─────┐ │      │
+│  │                             │Sanitizador│ │      │
+│  │                             └─────┬─────┘ │      │
+│  │                             ┌─────▼─────┐ │      │
 │  │                             │  Cliente  │ │      │
 │  │                             │    LLM    │ │      │
 │  │                             └─────┬─────┘ │      │
@@ -269,8 +339,7 @@ DOCTORJK_LLM_API_KEY=...
   │  de LLM       │      │  (opcional)    │
   │               │      │  historial +   │
   │  Cloudflare / │      │  panel web     │
-  │  DeepSeek /   │      │                │
-  │  Ollama local │      │                │
+  │  DeepSeek     │      │                │
   └───────────────┘      └────────────────┘
 ```
 
@@ -282,6 +351,7 @@ DOCTORJK_LLM_API_KEY=...
 | 00:30 | Monitor detecta el cambio, marca candidato |
 | 01:00 | Sigue en `failed` — el detector confirma incidente |
 | 01:01 | Recolector ejecuta comandos, arma evidencia (~10k tokens) |
+| 01:02 | Sanitizador enmascara IPs, credenciales y rutas antes del envío |
 | 01:03 | Cliente LLM hace POST al proveedor |
 | 01:12 | Respuesta recibida (~2.5k tokens de diagnóstico + guía) |
 | 01:13 | Informe escrito en disco |
@@ -304,6 +374,7 @@ Del fallo al informe: menos de 90 segundos. Del fallo a la corrección verificad
 | HTTP | `requests` o `httpx` | Única dependencia externa real |
 | Configuración | Archivo TOML + variables de entorno | Secretos fuera del archivo de config |
 | Logs propios | `logging` a journald | El agente se audita con las mismas herramientas que vigila |
+| Sanitización | Expresiones regulares (`re`) | Sin dependencias externas para enmascarar datos sensibles |
 
 ### 7.2 Recolección de datos
 
@@ -328,9 +399,8 @@ Todo con herramientas del sistema, sin dependencias:
 |---|---|---|---|
 | Cloudflare Workers AI | Kimi K2.6 | `/accounts/{id}/ai/v1/chat/completions` | Gratis |
 | DeepSeek | V4 Flash | `api.deepseek.com/v1` | ~$1.16 por 6 meses |
-| Ollama (local) | Qwen3-8B | `localhost:11434/v1` | Gratis, sin internet |
 
-Los tres hablan formato OpenAI-compatible. Cambiar de proveedor = cambiar 3 variables de entorno.
+Los dos hablan formato OpenAI-compatible. Cambiar de proveedor = cambiar 3 variables de entorno.
 
 ### 7.4 Backend opcional
 
@@ -406,6 +476,7 @@ doctor-jk/
 │   ├── trigger.sh           # detección en tiempo real por bash
 │   ├── detector.py          # lógica de incidente
 │   ├── recolector.py        # ensamblado de evidencia
+│   ├── sanitizador.py       # enmascarado de datos sensibles
 │   ├── llm.py               # cliente OpenAI-compatible
 │   ├── informe.py           # escritura y rotación
 │   ├── remediador.py        # ejecución de correcciones
@@ -468,11 +539,12 @@ doctor-jk/
 
 ### 10.2 Estimación para 6 meses (550 informes)
 
+Estas cifras corresponden al desarrollo del prototipo. En producción, el costo de inferencia lo asume Beetle como parte del servicio (ver sección 23) — el cliente no gestiona tokens ni cuentas de proveedor de LLM.
+
 | Proveedor | Precio in/out por 1M | Costo total |
 |---|---|---|
 | Cloudflare Workers AI (Kimi K2.6) | Gratis | **$0** |
 | DeepSeek V4 Flash | $0.14 / $0.28 | **$1.16** |
-| Ollama local (Qwen3-8B) | Gratis | **$0** |
 
 ### 10.3 Infraestructura
 
@@ -529,48 +601,48 @@ Kimi K2.6 es un modelo de ~1 billón de parámetros. Aunque los pesos son públi
 16. Ensamblado del bloque de evidencia con secciones etiquetadas
 17. Truncado inteligente si excede el presupuesto de tokens
 18. Guardar la evidencia cruda junto al informe
+19. Sanitización de datos sensibles antes de pasar la evidencia al cliente LLM (`sanitizador.py`)
 
 ### Fase 4 — Cliente LLM (2 días)
 
-19. Cliente HTTP contra endpoint OpenAI-compatible
-20. Manejo de errores: timeout, rate limit, respuesta malformada
-21. Reintentos con backoff exponencial
-22. Modo caché para desarrollo
-23. Fallback: si el LLM falla, informe mínimo con evidencia cruda
+20. Cliente HTTP contra endpoint OpenAI-compatible
+21. Manejo de errores: timeout, rate limit, respuesta malformada
+22. Reintentos con backoff exponencial
+23. Modo caché para desarrollo
+24. Fallback: si el LLM falla, informe mínimo con evidencia cruda
 
 ### Fase 5 — Prompt (1 semana, en paralelo)
 
-24. Prompt estructurado con diagnóstico + guía paso a paso
-25. Iterar contra evidencia guardada de los escenarios
-26. Validar comprensibilidad del lenguaje
-27. Ajustar para reducir alucinaciones
+25. Prompt estructurado con diagnóstico + guía paso a paso
+26. Iterar contra evidencia guardada de los escenarios
+27. Validar comprensibilidad del lenguaje
+28. Ajustar para reducir alucinaciones
 
 ### Fase 6 — Persistencia y servicio (3 días)
 
-28. Escritura de informes en `/var/lib/doctorjk/informes/`
-29. Unit de systemd con `Restart=always`
-30. Script de instalación
-31. Rotación de informes
+29. Escritura de informes en `/var/lib/doctorjk/informes/`
+30. Unit de systemd con `Restart=always`
+31. Script de instalación
+32. Rotación de informes
 
 ### Fase 7 — Remediador por scripts (1 semana)
 
-32. Scripts bash de corrección para los tipos de incidente conocidos
-33. Clasificador de tipo de incidente
-34. Logging de auditoría de qué se ejecutó
-35. Verificación post-corrección
+33. Scripts bash de corrección para los tipos de incidente conocidos
+34. Clasificador de tipo de incidente
+35. Logging de auditoría de qué se ejecutó
+36. Verificación post-corrección
 
 ### Fase 8 — Escenarios realistas y medición (1 semana)
 
-36. Scripts de provocación para cada escenario
-37. Respuestas esperadas documentadas
-38. 3 corridas por escenario
-39. Tabulación de resultados
+37. Scripts de provocación para cada escenario
+38. Respuestas esperadas documentadas
+39. 3 corridas por escenario
+40. Tabulación de resultados
 
-### Fase 9 — Opcionales
+### Fase 9 — Remediador Automático y extensiones
 
-40. Remediador Automático (sección 14)
-41. Backend receptor de informes + panel web
-42. Modo Ollama local
+41. Remediador Automático (sección 14) — alcance obligatorio del producto, no opcional
+42. Backend receptor de informes + panel web (opcional)
 
 ---
 
@@ -693,7 +765,7 @@ Abre tu sitio en el navegador. Debe cargar normalmente.
 
 ### 14.1 Qué es
 
-Es la fase donde Doctor J/K no solo diagnostica y propone, sino que **ejecuta la corrección**. El objetivo de negocio es claro: que un incidente a las 3am se resuelva sin despertar a nadie, reduciendo el MTTR a menos de 2 minutos y manteniendo los nines de disponibilidad del servicio.
+Es el componente del alcance del producto donde Doctor J/K no solo diagnostica y propone, sino que **ejecuta la corrección** — siempre bajo las salvaguardas obligatorias de la sección 14.5. No es una fase experimental: es un diferenciador comercial central (ver sección 23). El objetivo de negocio es claro: que un incidente a las 3am se resuelva sin despertar a nadie, reduciendo el MTTR a menos de 2 minutos y manteniendo los nines de disponibilidad del servicio.
 
 ### 14.2 Por qué importa
 
@@ -871,7 +943,7 @@ Todas las pruebas deben correr **con tráfico de fondo**.
 | Tiempo a informe | Del fallo al archivo escrito | < 120 s |
 | Utilidad de la guía | Guías que resuelven el problema | > 70% |
 | Comprensibilidad | Personas no expertas que entienden | > 80% |
-| Corrección automática (si aplica) | Remediaciones exitosas | > 85% |
+| Corrección automática | Remediaciones exitosas | > 85% |
 
 **Protocolo:** 42 corridas controladas (9 escenarios × 3 + 5 negativos × 3), con causa raíz definida antes de ejecutar cada escenario.
 
@@ -893,17 +965,17 @@ Cuando el modelo sí genera comandos, estos pasan por lista blanca, validación,
 
 El diagnóstico requiere acceso local a `journalctl`, systemd y el sistema de archivos. Hacerlo remotamente exigiría SSH desde una máquina central — un punto de compromiso peor que el problema que resuelve.
 
-### 17.4 Soporte de modelo local (Ollama)
-
-Los logs contienen IPs, rutas internas y a veces credenciales. Poder operar sin enviar datos a un tercero es una característica de producto, no un ahorro.
-
-### 17.5 Detección por persistencia, no por umbral instantáneo
+### 17.4 Detección por persistencia, no por umbral instantáneo
 
 Reduce falsos positivos intercambiando unos segundos de latencia por una reducción grande de ruido.
 
-### 17.6 Informe como herramienta educativa
+### 17.5 Informe como herramienta educativa
 
 Cada informe explica conceptos, no solo los nombra. La persona que lo lee hoy debería necesitar menos a Doctor J/K para el mismo problema mañana.
+
+### 17.6 Sanitización antes del envío
+
+Los logs contienen IPs, rutas internas y a veces credenciales. Versiones anteriores de este documento resolvían esto con un modo de modelo local; se descartó por alcance y foco de producto, no porque fuera técnicamente inviable (ver pregunta de privacidad en la sección 22). En su lugar, el módulo `sanitizador.py` (detalle completo en la sección 5.3) enmascara los datos sensibles antes de que la evidencia salga del servidor — reduce el riesgo de fuga sin sacrificar la simplicidad de mantener un único par de backends de inferencia.
 
 ---
 
@@ -914,10 +986,11 @@ Cada informe explica conceptos, no solo los nombra. La persona que lo lee hoy de
 | Falsos positivos excesivos | Alta | Alto | 2 semanas en el detector + casos negativos |
 | Modelo alucina causas o comandos | Media | Alto | Niveles de confianza, sección "Descartado", lista blanca, auditoría |
 | Guías incomprensibles | Media | Alto | Prueba de comprensibilidad, iteración del prompt |
-| Proveedor de LLM cambia límites | Media | Medio | 3 backends intercambiables |
-| Falla la red durante demo | Media | Alto | Informes pregenerados; modo Ollama |
+| Proveedor de LLM cambia límites | Media | Medio | 2 backends intercambiables (antes 3 con Ollama; mitigación más débil sin respaldo local) |
+| Falla la red durante demo | Media | Alto | Informes pregenerados. Ya no hay modo offline de respaldo (se eliminó el modo Ollama local) |
 | Oracle recorta free tier | Media | Bajo | Desarrollo en home lab; Oracle solo para observación |
 | Cascada no se resuelve bien | Media | Medio | Se reporta como limitación si falla |
+| Modo 3 obligatorio sobrecarga la Fase 9 | Media | Alto | Incluir el Remediador Automático en el alcance obligatorio aumenta la carga de la Fase 9 y reduce el margen de maniobra si la Fase 2 (Detector) se atrasa. Se prioriza sobre extensiones opcionales (backend, panel) si hay que recortar |
 
 ---
 
@@ -928,21 +1001,24 @@ Cada informe explica conceptos, no solo los nombra. La persona que lo lee hoy de
 - Agente detectando 9 escenarios (4 básicos + 5 realistas)
 - Trigger bash en tiempo real
 - Informes con diagnóstico + guía paso a paso
+- Sanitización de datos sensibles antes de cualquier envío externo
 - Remediador por scripts (Modo 2)
-- Tres backends de LLM intercambiables
+- Remediador Automático con modelo (Modo 3), con las salvaguardas de la sección 14.5
+- Dos backends de LLM intercambiables
 - Batería de pruebas con métricas
 - Prueba de comprensibilidad
 - Script de instalación
 
 ### Fuera del alcance (trabajo futuro)
 
-- Remediador Automático con modelo (Modo 3) — fase beta, si sobra tiempo
+- Modo de modelo local (Ollama) — descartado para esta versión, no pendiente
 - Panel web con historial
 - Notificaciones por correo o Telegram
 - Soporte para distribuciones no systemd
 - Detección de incidentes de red
 - Correlación entre múltiples servidores
 - Integración con Graphify para diagnóstico de bugs de código
+- Control de licencias por API key contra backend de Beetle (ver sección 23)
 
 ---
 
@@ -952,15 +1028,15 @@ Cada informe explica conceptos, no solo los nombra. La persona que lo lee hoy de
 |---|---|
 | 1 | Fase 0 + Fase 1 — entorno, monitor y trigger bash |
 | 2–3 | Fase 2 — detector (la parte crítica) |
-| 4 | Fase 3 — recolector |
+| 4 | Fase 3 — recolector + sanitización |
 | 5 | Fase 4 + Fase 5 — cliente LLM y prompt |
 | 6 | Fase 6 — persistencia y servicio systemd |
 | 7 | Fase 7 — remediador por scripts |
 | 8 | Fase 8 — escenarios realistas y medición |
-| 9 | Prueba de comprensibilidad + opcionales |
+| 9 | Fase 9 — Remediador Automático (obligatorio) + prueba de comprensibilidad |
 | 10 | Documentación y preparación |
 
-El detector concentra el riesgo técnico. Si se atrasa, se recorta la semana 9, no la 7 ni la 8.
+El detector concentra el riesgo técnico. Si se atrasa, se recorta la semana 9 — pero el Remediador Automático ya no es opcional, así que lo primero en recortarse ahí son las extensiones opcionales (backend, panel), no la 7 ni la 8. Ver riesgo de cronograma en la sección 18.
 
 ---
 
@@ -991,7 +1067,6 @@ Ordenados del mejor al peor en calidad para Doctor J/K (lectura de logs, correla
 | 17 | **Mistral Small 4** | $0.15 / $0.60 | Pago | $1.65 | Buena — data residency EU, compliance GDPR |
 | 18 | **Qwen3.6 Flash** | $0.19 / $1.13 | Pago | $2.60 | Buena — útil para clasificación rápida |
 | 19 | **Llama 4 Scout** | Varía por host | **Gratis** vía Groq | **$0** | Aceptable — sigue formato pero correlaciona peor |
-| 20 | **Qwen3-8B** | N/A (local) | **Gratis** vía Ollama | **$0** | Aceptable — su valor es privacidad, no calidad |
 
 Todos caben en el presupuesto de $80. El motor principal recomendado (Kimi K2.6 #8, gratis) tiene mejor calidad que 12 modelos de pago.
 
@@ -1009,7 +1084,7 @@ En Modo 1 y 2, no importa: el informe se lee y se descarta; la corrección la ha
 El LLM es el 5% del código. El aporte está en tres capas: detección (distinguir incidente de pico normal), recolección (la evidencia correcta en la ventana correcta), y diseño del prompt (formato comprensible y accionable). Un LLM con evidencia equivocada produce un informe equivocado con mucha seguridad.
 
 **¿Y la privacidad de los logs?**
-Modo Ollama: todo local, nada sale del servidor. Es una característica de producto, no una limitación.
+La evidencia sí se envía a un proveedor externo (Cloudflare o DeepSeek), pero antes pasa por el módulo de sanitización (`sanitizador.py`, ver sección 5.3): enmascara IPs, credenciales, tokens y rutas con nombre de usuario. Solo se envían logs de sistema recortados a la ventana temporal del incidente (−5 min a +1 min) — nunca datos de aplicación ni contenido de bases de datos. La evidencia cruda, sin sanitizar, queda guardada localmente en el servidor vigilado para que quien la opera pueda inspeccionarla. La sanitización por patrones no es exhaustiva — cubre los casos comunes, no garantiza cobertura total.
 
 **¿Escala a muchos servidores?**
 El agente es independiente por máquina — escala horizontalmente sin coordinación. La correlación entre servidores es trabajo futuro.
@@ -1025,5 +1100,48 @@ Cambias una variable de entorno y el agente funciona con otro proveedor. Por eso
 
 ---
 
+## 23. Modelo de producto y distribución
+
+### Naturaleza del producto
+
+Doctor J/K es código cerrado y propietario. Se distribuye como paquete instalable o imagen Docker, no como código fuente. La propiedad intelectual pertenece a Beetle.
+
+### El acceso al LLM es parte del servicio
+
+El cliente no necesita cuenta propia de Cloudflare ni gestionar tokens de API. Beetle provee el acceso al modelo como parte del producto. Esto simplifica radicalmente la instalación (coherente con la expectativa de <15 minutos) y elimina una barrera de adopción, pero traslada el costo de inferencia a Beetle — un costo que hoy es cercano a cero gracias a Cloudflare Workers AI, y que debe monitorearse si el free tier cambia.
+
+### Modelo de precio
+
+- Prueba gratuita: hasta 5 servidores durante 30 días, funcionalidad completa
+- Después del periodo de prueba: modelo de pago por servidor/mes
+
+Se rechaza explícitamente el modelo de precio por incidente: penaliza a quien más problemas tiene, que es justamente quien más necesita la herramienta.
+
+**Nota sobre el prototipo:** el control de licencias (API key con límite de servidores verificado contra un backend de Beetle) es la implementación seria de este modelo de precio, pero queda fuera del alcance del prototipo (ver sección 19). En esta versión el límite es honor system — se documenta la intención comercial sin implementar el mecanismo de control.
+
+### Riesgo de adopción
+
+| Expectativa del cliente | Tensión con código cerrado | Cómo se aborda |
+|---|---|---|
+| Prefiere código auditable antes de dar acceso a producción | El código no es inspeccionable | Transparencia operativa: cada acción del agente queda registrada en journald y en el informe. El comportamiento es auditable aunque el código no lo sea |
+| Descubre herramientas vía GitHub, Hacker News, r/sysadmin | Esos canales favorecen proyectos abiertos | Requiere estrategia de distribución distinta: contenido técnico, demos públicas, documentación abierta aunque el código no lo sea |
+| Desconfía de cajas negras | Un agente cerrado con acceso a logs y capacidad de ejecutar comandos es exactamente eso | Modo 1 por defecto (no ejecuta nada), `--dry-run` disponible, lista blanca de comandos documentada públicamente |
+
+Esta tensión es un riesgo real de adopción para el buyer persona descrito en la sección 2.1 — Mateo desconfía de cajas negras por naturaleza. No es un detalle resuelto; es algo que la estrategia de distribución y la transparencia operativa deben seguir trabajando activamente.
+
+### Diferenciadores del producto
+
+1. Diagnóstico en lenguaje accesible, no solo alertas
+2. Remediación auditable — registro completo de qué hizo y por qué
+3. Precio accesible frente a herramientas enterprise
+4. Instalación en menos de 15 minutos
+5. Sanitización de datos sensibles antes de cualquier envío externo
+
+### Repositorio
+
+El repositorio de código permanece privado. Si se publica un repositorio de showcase para portafolio, contiene documentación, arquitectura, capturas e informes de ejemplo — nunca el código fuente del agente.
+
+---
+
 *Documento de proyecto — Beetle / Doctor J/K*
-*Versión 3.0 — Agosto 2026*
+*Versión 4.0 — Agosto 2026*
