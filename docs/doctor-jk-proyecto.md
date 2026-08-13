@@ -510,7 +510,7 @@ doctor-jk/
 
 | Pieza | Ubicación | Costo |
 |---|---|---|
-| Código fuente | GitHub | $0 |
+| Código fuente | GitHub (repositorio privado) | $0 |
 | Desarrollo y pruebas destructivas | Home lab (VMs locales) | $0 |
 | Agente en operación | Instalado en el servidor vigilado | $0 |
 | Modelo de IA (Kimi K2.6) | Servidores de Cloudflare — petición HTTP | $0 |
@@ -594,7 +594,7 @@ Kimi K2.6 es un modelo de ~1 billón de parámetros. Aunque los pesos son públi
 
 > Esta fase concentra el 80% del riesgo. No pasar a la siguiente hasta que esté sólida.
 
-### Fase 3 — Recolector (4 días)
+### Fase 3 — Recolector + Sanitización (5 días)
 
 14. Recorte de ventana temporal en `journalctl`
 15. Filtrado por prioridad para controlar el tamaño
@@ -602,47 +602,66 @@ Kimi K2.6 es un modelo de ~1 billón de parámetros. Aunque los pesos son públi
 17. Truncado inteligente si excede el presupuesto de tokens
 18. Guardar la evidencia cruda junto al informe
 19. Sanitización de datos sensibles antes de pasar la evidencia al cliente LLM (`sanitizador.py`)
+20. Pruebas del sanitizador: verificar consistencia de reemplazos, casos límite, documentar limitaciones
 
 ### Fase 4 — Cliente LLM (2 días)
 
-20. Cliente HTTP contra endpoint OpenAI-compatible
-21. Manejo de errores: timeout, rate limit, respuesta malformada
-22. Reintentos con backoff exponencial
-23. Modo caché para desarrollo
-24. Fallback: si el LLM falla, informe mínimo con evidencia cruda
+21. Cliente HTTP contra endpoint OpenAI-compatible
+22. Manejo de errores: timeout, rate limit, respuesta malformada
+23. Reintentos con backoff exponencial
+24. Modo caché para desarrollo
+25. Fallback: si el LLM falla, informe mínimo con evidencia cruda
 
 ### Fase 5 — Prompt (1 semana, en paralelo)
 
-25. Prompt estructurado con diagnóstico + guía paso a paso
-26. Iterar contra evidencia guardada de los escenarios
-27. Validar comprensibilidad del lenguaje
-28. Ajustar para reducir alucinaciones
+26. Prompt estructurado con diagnóstico + guía paso a paso
+27. Iterar contra evidencia guardada de los escenarios
+28. Validar comprensibilidad del lenguaje
+29. Ajustar para reducir alucinaciones
 
 ### Fase 6 — Persistencia y servicio (3 días)
 
-29. Escritura de informes en `/var/lib/doctorjk/informes/`
-30. Unit de systemd con `Restart=always`
-31. Script de instalación
-32. Rotación de informes
+30. Escritura de informes en `/var/lib/doctorjk/informes/`
+31. Unit de systemd con `Restart=always`
+32. Script de instalación
+33. Rotación de informes
 
 ### Fase 7 — Remediador por scripts (1 semana)
 
-33. Scripts bash de corrección para los tipos de incidente conocidos
-34. Clasificador de tipo de incidente
-35. Logging de auditoría de qué se ejecutó
-36. Verificación post-corrección
+34. Scripts bash de corrección para los tipos de incidente conocidos
+35. Clasificador de tipo de incidente
+36. Logging de auditoría de qué se ejecutó
+37. Verificación post-corrección
 
 ### Fase 8 — Escenarios realistas y medición (1 semana)
 
-37. Scripts de provocación para cada escenario
-38. Respuestas esperadas documentadas
-39. 3 corridas por escenario
-40. Tabulación de resultados
+38. Scripts de provocación para cada escenario
+39. Respuestas esperadas documentadas
+40. 3 corridas por escenario
+41. Tabulación de resultados
 
-### Fase 9 — Remediador Automático y extensiones
+### Fase 9 — Remediador Automático (Modo 3) — Alcance obligatorio
 
-41. Remediador Automático (sección 14) — alcance obligatorio del producto, no opcional
-42. Backend receptor de informes + panel web (opcional)
+42. Generador de plan de corrección estructurado
+43. [SALVAGUARDA] Lista blanca de comandos permitidos
+44. [SALVAGUARDA] Modo --dry-run
+45. [SALVAGUARDA] Flag explícito --auto-fix
+46. Ejecutor paso a paso con validación
+47. [SALVAGUARDA] Aborto automático y escalamiento
+48. [SALVAGUARDA] Logging de auditoría del Modo 3
+49. Medición de corrección automática (meta: >85%)
+50. Prueba de comprensibilidad con usuarios (5 informes a 3–5 personas no técnicas)
+
+**Criterio de avance:** Corrección automática >85%, comprensibilidad >80%, y las 5 salvaguardas implementadas y verificadas.
+
+### Fase 10 — Documentación y entrega (1 semana)
+
+51. Documentación de arquitectura
+52. README completo
+53. Empaquetado para distribución
+54. Preparación de demo
+55. Presentación
+56. Backend receptor de informes + panel web (opcional)
 
 ---
 
@@ -888,7 +907,7 @@ Kimi K2.6 gratis es el #8 de la tabla general de calidad — mejor que 12 modelo
 
 Sin importar qué opción se elija:
 
-- **Lista blanca de comandos:** solo se ejecutan patrones validados (reiniciar servicio, borrar logs en rutas específicas, liberar espacio en directivos predefinidos). Nunca comandos genéricos generados libremente.
+- **Lista blanca de comandos:** solo se ejecutan patrones validados (reiniciar servicio, borrar logs en rutas específicas, liberar espacio en directorios predefinidos). Nunca comandos genéricos generados libremente.
 - **Modo `--dry-run`:** muestra qué haría sin ejecutar. Obligatorio durante desarrollo y demo.
 - **Logging de auditoría:** cada comando ejecutado, su resultado, y la decisión del modelo quedan en el informe final.
 - **Aborto automático:** si cualquier paso produce un resultado inesperado, el remediador se detiene y escala (notifica, deja el informe, no sigue).
@@ -1028,13 +1047,13 @@ Los logs contienen IPs, rutas internas y a veces credenciales. Versiones anterio
 |---|---|
 | 1 | Fase 0 + Fase 1 — entorno, monitor y trigger bash |
 | 2–3 | Fase 2 — detector (la parte crítica) |
-| 4 | Fase 3 — recolector + sanitización |
-| 5 | Fase 4 + Fase 5 — cliente LLM y prompt |
+| 4 | Fase 3 + Fase 4 — recolector, sanitización y cliente LLM |
+| 5 | Fase 5 — prompt (paralelizable desde semana 3) |
 | 6 | Fase 6 — persistencia y servicio systemd |
 | 7 | Fase 7 — remediador por scripts |
-| 8 | Fase 8 — escenarios realistas y medición |
+| 8 | Fase 8 — escenarios de prueba y medición |
 | 9 | Fase 9 — Remediador Automático (obligatorio) + prueba de comprensibilidad |
-| 10 | Documentación y preparación |
+| 10 | Fase 10 — documentación, empaquetado y entrega |
 
 El detector concentra el riesgo técnico. Si se atrasa, se recorta la semana 9 — pero el Remediador Automático ya no es opcional, así que lo primero en recortarse ahí son las extensiones opcionales (backend, panel), no la 7 ni la 8. Ver riesgo de cronograma en la sección 18.
 
