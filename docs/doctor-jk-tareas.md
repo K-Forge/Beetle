@@ -2,13 +2,13 @@
 ## Tareas del Proyecto
 **Versión 4.0 — Agosto 2026**
 
-**Total:** 56 tareas activas (issues #49–#104)
+**Total:** 56 tareas activas (issues #166–#221)
 
 ---
 
 ## Fase 0 — Preparación
 
-### #49 — Crear repositorio privado en GitHub
+### #166 — Crear repositorio privado en GitHub
 
 **Label:** `fase-0`
 
@@ -34,7 +34,7 @@ Repositorio privado creado en GitHub, con la estructura de carpetas completa, `.
 
 ---
 
-### #50 — Configurar VPS Oracle Always Free
+### #167 — Configurar VPS Oracle Always Free
 
 **Label:** `fase-0`
 
@@ -60,7 +60,7 @@ VPS accesible por SSH desde las máquinas de Brian y Mauricio, con Ubuntu Server
 
 ---
 
-### #51 — Snapshot de VPS limpio
+### #168 — Snapshot de VPS limpio
 
 **Label:** `fase-0`
 
@@ -85,7 +85,7 @@ El VPS puede restaurarse desde el snapshot. Documentar el tiempo real de restaur
 
 ---
 
-### #52 — Instalar carga realista
+### #169 — Instalar carga realista
 
 **Label:** `fase-0`
 
@@ -111,7 +111,7 @@ Nginx responde en el puerto 80, PostgreSQL tiene ~50k filas consultables, el cro
 
 ---
 
-### #53 — Configurar Cloudflare
+### #170 — Configurar Cloudflare
 
 **Label:** `fase-0`
 
@@ -145,7 +145,7 @@ Un curl desde el VPS hacia el endpoint de Cloudflare Workers AI devuelve una res
 
 ## Fase 1 — Monitor + Trigger
 
-### #54 — Monitor con polling
+### #171 — Monitor con polling
 
 **Label:** `fase-1`
 
@@ -175,7 +175,7 @@ El script corre 1+ hora sin errores, produce lecturas coherentes y reproducibles
 
 ---
 
-### #55 — Trigger bash en tiempo real
+### #172 — Trigger bash en tiempo real
 
 **Label:** `fase-1`
 
@@ -201,7 +201,7 @@ Cuando se provoca un error (ej: `systemctl stop postgresql`), el trigger lo dete
 
 ---
 
-### #56 — Normalizar señales
+### #173 — Normalizar señales
 
 **Label:** `fase-1`
 
@@ -237,7 +237,7 @@ Todas las lecturas del monitor y del trigger se convierten al diccionario normal
 
 ## Fase 2 — Detector
 
-### #57 — Contadores de persistencia
+### #174 — Contadores de persistencia
 
 **Label:** `fase-2`
 
@@ -263,7 +263,7 @@ Un pico temporal de una sola lectura NO dispara incidente. Una condición sosten
 
 ---
 
-### #58 — Umbrales configurables
+### #175 — Umbrales configurables
 
 **Label:** `fase-2`
 
@@ -295,7 +295,7 @@ El detector respeta los umbrales del archivo TOML. Cambiar un valor en el archiv
 
 ---
 
-### #59 — Máquina de estados
+### #176 — Máquina de estados
 
 **Label:** `fase-2`
 
@@ -326,7 +326,7 @@ Las 4 transiciones funcionan correctamente. Un pico de <N ciclos se descarta com
 
 ---
 
-### #60 — Deduplicación
+### #177 — Deduplicación
 
 **Label:** `fase-2`
 
@@ -351,7 +351,7 @@ Un incidente activo de disco lleno no genera un segundo informe aunque la condic
 
 ---
 
-### #61 — Registro de decisiones
+### #178 — Registro de decisiones
 
 **Label:** `fase-2`
 
@@ -381,7 +381,7 @@ Cada decisión del detector (disparar, descartar, suprimir) queda registrada en 
 
 ## Fase 3 — Recolector + Sanitización
 
-### #62 — Recorte de ventana temporal
+### #179 — Recorte de ventana temporal
 
 **Label:** `fase-3`
 
@@ -406,7 +406,7 @@ Los logs recolectados cubren exactamente la ventana temporal definida. No se inc
 
 ---
 
-### #63 — Filtrado por prioridad
+### #180 — Filtrado por prioridad
 
 **Label:** `fase-3`
 
@@ -430,7 +430,7 @@ Los logs recolectados no contienen mensajes de nivel info o debug. Los mensajes 
 
 ---
 
-### #64 — Ensamblado de evidencia
+### #181 — Ensamblado de evidencia
 
 **Label:** `fase-3`
 
@@ -459,7 +459,7 @@ El bloque de evidencia ensamblado contiene las 5 secciones, correctamente etique
 
 ---
 
-### #65 — Truncado inteligente
+### #182 — Truncado inteligente
 
 **Label:** `fase-3`
 
@@ -486,7 +486,7 @@ Una evidencia de 15k tokens se trunca a ~10k tokens sin perder la sección de er
 
 ---
 
-### #66 — Guardar evidencia cruda
+### #183 — Guardar evidencia cruda
 
 **Label:** `fase-3`
 
@@ -511,7 +511,7 @@ Junto a cada informe generado, existe un archivo `_evidencia.txt` con los datos 
 
 ---
 
-### #67 — Módulo sanitizador
+### #184 — Módulo sanitizador
 
 **Label:** `fase-3`
 
@@ -542,7 +542,7 @@ Ninguna IP, credencial, token ni ruta con nombre de usuario aparece en la eviden
 
 ---
 
-### #68 — Pruebas del sanitizador
+### #185 — Pruebas del sanitizador
 
 **Label:** `fase-3`
 
@@ -574,7 +574,7 @@ Tests pasan al 100% para los patrones definidos. La misma IP siempre produce el 
 
 ## Fase 4 — Cliente LLM
 
-### #69 — Cliente OpenAI-compatible
+### #186 — Cliente OpenAI-compatible
 
 **Label:** `fase-4`
 
@@ -603,7 +603,7 @@ El cliente envía evidencia al endpoint de Cloudflare Workers AI y recibe un dia
 
 ---
 
-### #70 — Manejo de errores
+### #187 — Manejo de errores
 
 **Label:** `fase-4`
 
@@ -628,7 +628,7 @@ El cliente sobrevive a un timeout (no se queda colgado), a un rate limit (espera
 
 ---
 
-### #71 — Reintentos con backoff
+### #188 — Reintentos con backoff
 
 **Label:** `fase-4`
 
@@ -641,7 +641,7 @@ Implementar reintentos con backoff exponencial para las peticiones al LLM que fa
 - Reintentar en caso de: timeout, error 5xx, error de conexión, rate limit (429)
 - Backoff exponencial: 1s → 2s → 4s entre intentos
 - Máximo 3 intentos totales
-- Si los 3 intentos fallan, pasar al fallback sin LLM (tarea #73)
+- Si los 3 intentos fallan, pasar al fallback sin LLM (tarea #190)
 - Registrar cada reintento en log con el número de intento y la razón
 
 ## Por qué importa
@@ -654,7 +654,7 @@ Una petición que falla 2 veces y funciona a la tercera produce un informe norma
 
 ---
 
-### #72 — Modo caché
+### #189 — Modo caché
 
 **Label:** `fase-4`
 
@@ -680,7 +680,7 @@ Con `DOCTORJK_CACHE=true`, la segunda ejecución con la misma evidencia devuelve
 
 ---
 
-### #73 — Fallback sin LLM
+### #190 — Fallback sin LLM
 
 **Label:** `fase-4`
 
@@ -710,7 +710,7 @@ Con el LLM inaccesible, el agente genera un informe con la evidencia cruda etiqu
 
 ## Fase 5 — Prompt
 
-### #74 — Prompt estructurado
+### #191 — Prompt estructurado
 
 **Label:** `fase-5`
 
@@ -738,7 +738,7 @@ El prompt produce informes con las 8 secciones definidas (4 de diagnóstico + 4 
 
 ---
 
-### #75 — Iteración con escenarios
+### #192 — Iteración con escenarios
 
 **Label:** `fase-5`
 
@@ -756,7 +756,7 @@ Probar el prompt contra la evidencia guardada de cada escenario de prueba y ajus
   - ¿El lenguaje se entiende sin experiencia en sysadmin?
   - ¿Marca correctamente los niveles de confianza?
 - Ajustar redacción del prompt y re-ejecutar hasta que todos los escenarios produzcan informes aceptables
-- Usar el modo caché (tarea #72) para iterar rápidamente
+- Usar el modo caché (tarea #189) para iterar rápidamente
 
 ## Por qué importa
 
@@ -768,13 +768,13 @@ El prompt produce informes correctos para los 4 escenarios básicos y al menos 3
 
 ---
 
-### #76 — Validar comprensibilidad del lenguaje
+### #193 — Validar comprensibilidad del lenguaje
 
 **Label:** `fase-5`
 
 ## Qué es esta tarea
 
-Hacer una revisión interna e iterativa del lenguaje de los informes generados: ¿se entienden sin experiencia en administración de sistemas? Es una validación del equipo, no la prueba formal con usuarios externos (esa es la tarea #98).
+Hacer una revisión interna e iterativa del lenguaje de los informes generados: ¿se entienden sin experiencia en administración de sistemas? Es una validación del equipo, no la prueba formal con usuarios externos (esa es la tarea #215).
 
 ## Qué se debe hacer
 
@@ -795,7 +795,7 @@ Todos los informes generados usan lenguaje accesible. Cada término técnico tie
 
 ---
 
-### #77 — Reducir alucinaciones
+### #194 — Reducir alucinaciones
 
 **Label:** `fase-5`
 
@@ -826,7 +826,7 @@ Todos los informes incluyen la sección de causas descartadas y niveles de confi
 
 ## Fase 6 — Persistencia y Servicio Systemd
 
-### #78 — Escritura de informes
+### #195 — Escritura de informes
 
 **Label:** `fase-6`
 
@@ -852,7 +852,7 @@ Cada incidente detectado produce un archivo `.md` en `/var/lib/doctorjk/informes
 
 ---
 
-### #79 — Unit systemd
+### #196 — Unit systemd
 
 **Label:** `fase-6`
 
@@ -892,7 +892,7 @@ Doctor J/K es un agente que vive dentro del servidor (sección 2 del documento d
 
 ---
 
-### #80 — Script de instalación
+### #197 — Script de instalación
 
 **Label:** `fase-6`
 
@@ -924,7 +924,7 @@ Sobre un VPS limpio con Ubuntu Server 24.04, ejecutar `install.sh` deja Doctor J
 
 ---
 
-### #81 — Rotación de informes
+### #198 — Rotación de informes
 
 **Label:** `fase-6`
 
@@ -952,7 +952,7 @@ Nunca hay más de 30 informes (o 30 días) en el directorio. Los informes más a
 
 ## Fase 7 — Remediador por Scripts (Modo 2)
 
-### #82 — Scripts de corrección
+### #199 — Scripts de corrección
 
 **Label:** `fase-7`
 
@@ -983,7 +983,7 @@ Un incidente de disco lleno se resuelve automáticamente en <2 minutos sin inter
 
 ---
 
-### #83 — Clasificador de tipo
+### #200 — Clasificador de tipo
 
 **Label:** `fase-7`
 
@@ -1016,7 +1016,7 @@ Cada tipo de incidente detectado se mapea correctamente a su script de correcci�
 
 ---
 
-### #84 — Logging de auditoría
+### #201 — Logging de auditoría
 
 **Label:** `fase-7`
 
@@ -1045,7 +1045,7 @@ Después de una corrección automática, `journalctl -u doctorjk` muestra el com
 
 ---
 
-### #85 — Verificación post-corrección
+### #202 — Verificación post-corrección
 
 **Label:** `fase-7`
 
@@ -1078,7 +1078,7 @@ Después de cada corrección, se ejecuta una verificación. Si la verificación 
 
 ## Fase 8 — Escenarios de Prueba y Medición
 
-### #86 — Scripts de provocación
+### #203 — Scripts de provocación
 
 **Label:** `fase-8`
 
@@ -1104,7 +1104,7 @@ Los 9 scripts de provocación y los 5 de casos negativos están escritos y cada 
 
 ---
 
-### #87 — Respuestas esperadas
+### #204 — Respuestas esperadas
 
 **Label:** `fase-8`
 
@@ -1131,7 +1131,7 @@ Los 9 escenarios y 5 casos negativos tienen respuestas esperadas documentadas an
 
 ---
 
-### #88 — 3 corridas por escenario
+### #205 — 3 corridas por escenario
 
 **Label:** `fase-8`
 
@@ -1162,7 +1162,7 @@ Un agente que acierta 1 de 3 veces no es confiable. Las 3 corridas por escenario
 
 ---
 
-### #89 — Tabulación de resultados
+### #206 — Tabulación de resultados
 
 **Label:** `fase-8`
 
@@ -1189,7 +1189,7 @@ Construir la tabla de resultados: una matriz de escenario × métrica con el por
 
 ## Por qué importa
 
-Sin tabulación, los resultados son 42 informes sueltos que nadie puede interpretar rápidamente. La matriz permite ver de un vistazo dónde el agente falla y dónde excede la meta. Es también el material que va en la presentación final (tarea #103) y la base para decidir si el prototipo cumple sus objetivos (sección 16 del documento de proyecto).
+Sin tabulación, los resultados son 42 informes sueltos que nadie puede interpretar rápidamente. La matriz permite ver de un vistazo dónde el agente falla y dónde excede la meta. Es también el material que va en la presentación final (tarea #220) y la base para decidir si el prototipo cumple sus objetivos (sección 16 del documento de proyecto).
 
 ## Criterio de avance
 
@@ -1199,7 +1199,7 @@ Matriz completa con todas las métricas calculadas. Cada celda tiene el % de éx
 
 ## Fase 9 — Remediador Automático (Modo 3)
 
-### #90 — Generador de plan de corrección
+### #207 — Generador de plan de corrección
 
 **Label:** `fase-9`
 
@@ -1236,7 +1236,7 @@ El modelo genera planes de corrección con el formato estructurado para al menos
 
 ---
 
-### #91 — [SALVAGUARDA] Lista blanca de comandos
+### #208 — [SALVAGUARDA] Lista blanca de comandos
 
 **Label:** `fase-9`
 
@@ -1267,7 +1267,7 @@ Un comando `rm -rf /` generado por el modelo es rechazado y registrado. Solo los
 
 ---
 
-### #92 — [SALVAGUARDA] Modo dry-run
+### #209 — [SALVAGUARDA] Modo dry-run
 
 **Label:** `fase-9`
 
@@ -1296,7 +1296,7 @@ Con `--dry-run`, el agente genera un plan completo y muestra qué ejecutaría, p
 
 ---
 
-### #93 — [SALVAGUARDA] Flag explícito auto-fix
+### #210 — [SALVAGUARDA] Flag explícito auto-fix
 
 **Label:** `fase-9`
 
@@ -1323,7 +1323,7 @@ Una instalación nueva de Doctor J/K solo genera informes — no ejecuta correcc
 
 ---
 
-### #94 — Ejecutor paso a paso con validación
+### #211 — Ejecutor paso a paso con validación
 
 **Label:** `fase-9`
 
@@ -1333,9 +1333,9 @@ Implementar el ejecutor que toma el plan de corrección generado por el modelo y
 
 ## Qué se debe hacer
 
-- Recibir el plan estructurado del generador (tarea #90)
+- Recibir el plan estructurado del generador (tarea #207)
 - Para cada paso del plan:
-  1. Validar el comando contra la lista blanca (tarea #91)
+  1. Validar el comando contra la lista blanca (tarea #208)
   2. Ejecutar el comando
   3. Capturar stdout, stderr y código de salida
   4. Comparar el resultado contra la condición de continuación
@@ -1353,7 +1353,7 @@ Un plan de 4 pasos se ejecuta secuencialmente. Si el paso 2 falla la validación
 
 ---
 
-### #95 — [SALVAGUARDA] Aborto automático y escalamiento
+### #212 — [SALVAGUARDA] Aborto automático y escalamiento
 
 **Label:** `fase-9`
 
@@ -1382,7 +1382,7 @@ Un plan cuyo paso 2 falla: el paso 3 no se ejecuta, el informe documenta qué fa
 
 ---
 
-### #96 — [SALVAGUARDA] Logging de auditoría del Modo 3
+### #213 — [SALVAGUARDA] Logging de auditoría del Modo 3
 
 **Label:** `fase-9`
 
@@ -1413,7 +1413,7 @@ Después de una corrección del Modo 3, el informe contiene una sección de audi
 
 ---
 
-### #97 — Medición de corrección automática
+### #214 — Medición de corrección automática
 
 **Label:** `fase-9`
 
@@ -1429,7 +1429,7 @@ Medir la tasa de corrección automática exitosa del Modo 3 como métrica obliga
   - ¿El plan se ejecutó completamente?
   - ¿La verificación post-corrección confirmó que el problema se resolvió?
 - Calcular el porcentaje: remediaciones exitosas / incidentes donde se intentó corrección
-- Agregar la columna "Corrección automática" a la matriz de resultados (tarea #89)
+- Agregar la columna "Corrección automática" a la matriz de resultados (tarea #206)
 - Si la métrica está por debajo del 85%, iterar el prompt y la lista blanca
 
 ## Por qué importa
@@ -1442,7 +1442,7 @@ Tasa de corrección automática >85% medida sobre los escenarios de prueba. La m
 
 ---
 
-### #98 — Prueba de comprensibilidad con usuarios
+### #215 — Prueba de comprensibilidad con usuarios
 
 **Label:** `fase-9`
 
@@ -1472,7 +1472,7 @@ Comprensibilidad >80%: al menos 4 de cada 5 personas entienden qué pasó y podr
 
 ## Fase 10 — Documentación y Entrega
 
-### #99 — Documentación de arquitectura
+### #216 — Documentación de arquitectura
 
 **Label:** `fase-10`
 
@@ -1500,7 +1500,7 @@ El documento explica todos los componentes, su interacción y las decisiones de 
 
 ---
 
-### #100 — README completo
+### #217 — README completo
 
 **Label:** `fase-10`
 
@@ -1529,7 +1529,7 @@ Una persona que no ha visto el proyecto antes puede leer el README, instalar Doc
 
 ---
 
-### #101 — Empaquetado para distribución
+### #218 — Empaquetado para distribución
 
 **Label:** `fase-10`
 
@@ -1558,7 +1558,7 @@ El paquete o imagen Docker se instala en un VPS limpio sin necesidad de clonar e
 
 ---
 
-### #102 — Preparación de demo
+### #219 — Preparación de demo
 
 **Label:** `fase-10`
 
@@ -1588,7 +1588,7 @@ La demo completa funciona de principio a fin en menos de 10 minutos. Si se desco
 
 ---
 
-### #103 — Presentación
+### #220 — Presentación
 
 **Label:** `fase-10`
 
@@ -1619,7 +1619,7 @@ Presentación completa con las 7 secciones, máximo 20 slides, ensayada al menos
 
 ---
 
-### #104 — [OPT] Backend + panel web
+### #221 — [OPT] Backend + panel web
 
 **Label:** `fase-10`
 

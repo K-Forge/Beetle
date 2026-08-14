@@ -22,7 +22,7 @@ docs/
 |---|---|
 | [doctor-jk-proyecto.md](doctor-jk-proyecto.md) | Ikigai, problema, solución, arquitectura, stack, costos, prompt, remediador, escenarios, métricas, riesgos, modelo de producto |
 | [doctor-jk-roadmap.md](doctor-jk-roadmap.md) | Las 10 fases con su duración y su lista de recorte |
-| [doctor-jk-tareas.md](doctor-jk-tareas.md) | Issues #49–#104, cada una con qué hacer, por qué importa y criterio de avance |
+| [doctor-jk-tareas.md](doctor-jk-tareas.md) | Issues #166–#221, cada una con qué hacer, por qué importa y criterio de avance |
 | [links.md](links.md) | Canva, formularios y repositorios de referencia |
 
 ## Qué falta escribir
@@ -30,7 +30,7 @@ docs/
 - **`arquitectura.md`** — el detalle técnico que no cabe en el documento de proyecto: contratos
   entre módulos, formato de la evidencia, formato del plan de corrección del Modo 3.
 - **`sanitizador_limitaciones.md`** — lo que la sanitización por patrones no cubre, con al menos
-  tres escenarios concretos (tarea #68). Es transparencia con el cliente, no una nota interna:
+  tres escenarios concretos (tarea #185). Es transparencia con el cliente, no una nota interna:
   el documento de proyecto ya admite que "un dato sensible con formato inesperado puede
   escaparse" y esta es la versión detallada de esa admisión.
 
