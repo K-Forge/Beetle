@@ -38,12 +38,12 @@ Establecer el entorno de desarrollo y cuentas en la nube.
 | # | Tarea | Detalle |
 |---|-------|--------|
 | 1 | Crear repositorio privado en GitHub | Estructura de carpetas completa, `.gitignore`, README base. **Privado** — el producto es de código cerrado |
-| 2 | Crear VM Ubuntu Server 24.04 | 4 GB RAM, 20 GB disco (VirtualBox, Multipass o Proxmox) |
-| 3 | Snapshot de VM limpia | Para restaurar rápidamente después de romperla en pruebas |
+| 2 | Configurar VPS Oracle Always Free | Ubuntu Server 24.04 ARM64, Ampere A1 (hasta 4 OCPU / 24 GB RAM / 200 GB). Dar acceso SSH a los miembros del equipo |
+| 3 | Snapshot de VPS limpio | Boot volume backup en Oracle para restaurar después de pruebas destructivas |
 | 4 | Instalar carga realista | Nginx + PostgreSQL (~50k filas) + app pequeña + cron job |
 | 5 | Configurar Cloudflare | Account ID + token Workers AI en `.env` |
 
-**Criterio de avance:** VM lista con carga realista, Cloudflare token funcional.
+**Criterio de avance:** VPS listo con carga realista, Cloudflare token funcional.
 
 ---
 
@@ -160,7 +160,7 @@ Hacer que el agente viva como un servicio permanente.
 | 32 | Script de instalación | `install.sh` que crea usuarios, directorios, dependencias, copia archivos, habilita servicio. **Meta dura: <15 minutos de principio a fin** |
 | 33 | Rotación de informes | No llenar disco: guardar últimos 30 informes, borrar más antiguos. O por fecha (>30 días) |
 
-**Criterio de avance:** `systemctl start doctorjk` inicia el agente. Instalación completa cronometrada en <15 min sobre VM limpia.
+**Criterio de avance:** `systemctl start doctorjk` inicia el agente. Instalación completa cronometrada en <15 min sobre VPS limpio.
 
 ---
 
@@ -226,7 +226,7 @@ Ejecución controlada de todos los casos de prueba y tabulación de métricas.
 
 **Criterio de avance:** Corrección automática >85%, comprensibilidad >80%, y las 5 salvaguardas implementadas y verificadas.
 
-**⚠️ Riesgo de cronograma:** 9 tareas en una semana. Incluir el Modo 3 en el alcance obligatorio aumenta la carga de esta fase y reduce el margen de maniobra si la Fase 2 se atrasa. Si hay que recortar, se recortan los opcionales de Fase 10 — **nunca las salvaguardas 43–48**.
+**⚠️ Riesgo de cronograma:** 9 tareas en una semana. Incluir el Modo 3 en el alcance obligatorio aumenta la carga de esta fase y reduce el margen de maniobra si la Fase 2 se atrasa. Si hay que recortar, se recortan los opcionales de Fase 10 — **nunca las salvaguardas (tareas 43, 44, 45, 47 y 48)**.
 
 ---
 
@@ -286,7 +286,7 @@ Fase 10:                                              ■■■■■■■
 | 1º | Tarea 56 — Backend + panel web (opcional) |
 | 2º | Tarea 53 — Empaquetado (se entrega como script de instalación) |
 | 3º | Alcance de escenarios en Fase 8 (de 3 corridas a 2 por escenario) |
-| **Nunca** | Salvaguardas 43–48, ni las fases 2, 7 u 8 |
+| **Nunca** | Salvaguardas (tareas 43, 44, 45, 47 y 48), ni las fases 2, 7 u 8 |
 
 ---
 
@@ -294,7 +294,7 @@ Fase 10:                                              ■■■■■■■
 
 | Fase | Lenguaje | Stack | Herramientas |
 |------|----------|-------|-------------|
-| 0 | Bash | VM + GitHub (privado) + Cloudflare | VirtualBox / Multipass |
+| 0 | Bash | VPS Oracle + GitHub (privado) + Cloudflare | Oracle Cloud Console |
 | 1 | Python 3.11+ | systemd + journalctl + bash | Linux tools (native) |
 | 2 | Python 3.11+ | logging + diccionarios + estado | VS Code + pytest |
 | 3 | Python 3.11+ | subprocess + `re` (regex) | bash + pytest |
@@ -312,16 +312,16 @@ Fase 10:                                              ■■■■■■■
 
 | Fase | Criterio | Validación |
 |------|----------|-----------|
-| 0 | VM lista con carga realista | Nginx + Postgres responden, Cloudflare token funcional |
+| 0 | VPS listo con carga realista | Nginx + Postgres responden, Cloudflare token funcional |
 | 1 | Monitor corre 1+ hora sin errores | Lecturas coherentes y logs limpios |
 | 2 | **Detecta 4 básicos, 0 falsos en 24h** | 4/4 escenarios, 0 disparos en operación normal |
 | 3 | Evidencia <12k tokens, <30s, sanitizada | Ninguna IP/credencial sin enmascarar en los escenarios de prueba |
 | 4 | Llama 2 proveedores indistintamente | Cambio de env var = cambio de backend |
 | 5 | Diagnóstico no se degrada con datos enmascarados | El modelo correlaciona igual sobre `[IP_1]` que sobre la IP real |
-| 6 | Instalación en <15 min | Cronometrada sobre VM limpia |
+| 6 | Instalación en <15 min | Cronometrada sobre VPS limpio |
 | 7 | Incidente resuelto <2 min automáticamente | Script ejecuta, verificación pasa |
 | 8 | Todas las métricas en meta | >90% detección, >80% causa raíz, <10% falsos |
-| 9 | **Corrección automática >85% + 5 salvaguardas** | Remediaciones exitosas, dry-run funcional, aborto verificado |
+| 9 | **Corrección automática >85% + comprensibilidad >80% + 5 salvaguardas** | Remediaciones exitosas, dry-run funcional, aborto verificado |
 | 10 | Producto instalable y documentado | Alguien externo instala en <15 min sin ver el código |
 
 ---
@@ -343,11 +343,12 @@ Fase 10:                                              ■■■■■■■
 ## Notas para el equipo
 
 - **Comunicación:** Reunión de standup diaria (15min) para detectar bloqueos en ruta crítica.
-- **Testing:** Cada fase tiene snapshots de la VM para rollback rápido.
+- **Testing:** Cada fase tiene snapshots del VPS (boot volume backups en Oracle) para rollback rápido.
 - **Documentación:** Llenar wiki del repo conforme avanza, no al final.
 - **Repositorio privado:** El código no se publica. Si se arma un showcase para portafolio, va documentación, arquitectura, capturas e informes de ejemplo — nunca el código fuente del agente.
 - **Demo:** Grabado + vivo. Si falla la red, informes pregenerados (único respaldo desde que se eliminó el modo local).
 - **Presupuesto IA:** $0–$1.16 en 6 meses. En producción el costo de inferencia lo asume Beetle, no el cliente.
+- **Riesgo de VPS compartido:** todo el equipo desarrolla sobre un único VPS Oracle Always Free (propiedad de Brian). Si se pierde (Oracle reclama la instancia, error de configuración, cuenta comprometida), el equipo pierde el entorno de desarrollo completo. Mitigación: snapshots frecuentes (al menos antes de cada fase) y que cada miembro tenga su propia cuenta Oracle Always Free como respaldo (ver sección 18 del documento de proyecto).
 
 ---
 

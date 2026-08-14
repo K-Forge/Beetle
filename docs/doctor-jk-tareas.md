@@ -34,54 +34,54 @@ Repositorio privado creado en GitHub, con la estructura de carpetas completa, `.
 
 ---
 
-### #50 — Crear VM Ubuntu Server 24.04
+### #50 — Configurar VPS Oracle Always Free
 
 **Label:** `fase-0`
 
 ## Qué es esta tarea
 
-Crear la máquina virtual Ubuntu Server 24.04 que servirá como entorno de desarrollo y pruebas durante todo el proyecto. Es el servidor donde se instala, ejecuta y prueba Doctor J/K.
+Configurar el VPS de Oracle Always Free que servirá como entorno de desarrollo y pruebas durante todo el proyecto. Es el servidor donde se instala, ejecuta y prueba Doctor J/K. La instancia pertenece a Brian; todos los miembros del equipo que necesiten operar en el servidor tendrán acceso SSH.
 
 ## Qué se debe hacer
 
-- Crear una VM con Ubuntu Server 24.04 LTS
-- Asignar al menos 4 GB de RAM y 20 GB de disco
-- Usar VirtualBox, Multipass o Proxmox según la preferencia del equipo
-- Verificar acceso por SSH desde el host
-- Confirmar que el sistema arranca limpio y los servicios base funcionan
+- Crear una instancia ARM Ampere A1 en Oracle Always Free (si no existe)
+- Instalar Ubuntu Server 24.04 LTS (ARM64)
+- Configurar acceso SSH para Brian y Mauricio
+- Verificar conectividad desde las máquinas de ambos
+- Confirmar recursos disponibles (OCPU, RAM, disco) con los comandos correspondientes
 
 ## Por qué importa
 
-Todo el desarrollo y las pruebas destructivas se ejecutan sobre esta VM (sección 8.3 del documento de proyecto). Sin ella no se pueden provocar incidentes ni probar el agente. La especificación de 4 GB / 20 GB simula un servidor real de PyME con recursos limitados.
+Todo el desarrollo y las pruebas destructivas se ejecutan sobre este VPS. A diferencia de una VM local, el VPS tiene IP pública y está disponible 24/7 — permite pruebas de observación prolongada y demo en vivo sin depender de la máquina de un miembro del equipo.
 
 ## Criterio de avance
 
-VM arrancada, accesible por SSH, con Ubuntu Server 24.04 funcional, 4 GB de RAM y 20 GB de disco verificados con `free -m` y `df -h`.
+VPS accesible por SSH desde las máquinas de Brian y Mauricio, con Ubuntu Server 24.04 funcional. Recursos verificados con `free -m`, `df -h` y `nproc`.
 
 ---
 
-### #51 — Snapshot de VM limpia
+### #51 — Snapshot de VPS limpio
 
 **Label:** `fase-0`
 
 ## Qué es esta tarea
 
-Tomar un snapshot de la VM recién instalada, antes de instalar carga realista ni modificar nada. Es el punto de restauración limpio al que se vuelve después de cada prueba destructiva.
+Tomar un snapshot del VPS recién configurado, antes de instalar carga realista ni modificar nada. Es el punto de restauración limpio al que se vuelve después de cada prueba destructiva.
 
 ## Qué se debe hacer
 
-- Verificar que la VM está en estado limpio (solo SO base, sin carga instalada)
-- Tomar snapshot con la herramienta de virtualización (VirtualBox: Snapshots, Multipass: snapshot, Proxmox: Backup)
-- Nombrar el snapshot con fecha y descripción (ej: `base-limpia-2026-08-12`)
-- Probar la restauración: restaurar el snapshot y verificar que la VM vuelve al estado exacto
+- Tomar un boot volume backup desde la consola de Oracle Cloud
+- Nombrar el snapshot con fecha y descripción (ej: `base-limpia-2026-08-XX`)
+- Probar la restauración: crear una instancia desde el backup y verificar que el VPS vuelve al estado exacto
+- Documentar el procedimiento para que cualquier miembro del equipo pueda restaurar
 
 ## Por qué importa
 
-Las pruebas de Fase 8 rompen el servidor intencionalmente (disco lleno, OOM, servicios caídos). Sin un snapshot de restauración rápida, cada prueba requeriría reinstalar el SO desde cero — horas en vez de segundos (sección 8.3 del documento de proyecto).
+Las pruebas de Fase 8 rompen el servidor intencionalmente (disco lleno, OOM, servicios caídos). Sin un snapshot de restauración rápida, cada prueba requeriría reinstalar el SO desde cero — horas en vez de minutos (sección 8.3 del documento de proyecto).
 
 ## Criterio de avance
 
-Snapshot tomado y restauración probada: la VM vuelve al estado limpio en menos de 60 segundos.
+El VPS puede restaurarse desde el snapshot. Documentar el tiempo real de restauración en Oracle (típicamente 5–15 minutos, no 60 segundos como una VM local).
 
 ---
 
@@ -91,7 +91,7 @@ Snapshot tomado y restauración probada: la VM vuelve al estado limpio en menos 
 
 ## Qué es esta tarea
 
-Instalar servicios reales en la VM para que se parezca a un servidor de producción de una PyME. Sin carga realista, los logs están vacíos y los incidentes son triviales — el valor del detector está en encontrar la señal entre el ruido (sección 8.3 del documento de proyecto).
+Instalar servicios reales en el VPS para que se parezca a un servidor de producción de una PyME. Sin carga realista, los logs están vacíos y los incidentes son triviales — el valor del detector está en encontrar la señal entre el ruido (sección 8.3 del documento de proyecto).
 
 ## Qué se debe hacer
 
@@ -125,7 +125,7 @@ Crear una cuenta en Cloudflare y obtener las credenciales necesarias para consum
 - Ir a AI → Workers AI → aceptar términos de servicio
 - Ir a My Profile → API Tokens → crear token con permiso "Workers AI read/write"
 - Copiar el Account ID (aparece en la página de Workers AI)
-- Guardar ambos valores en un archivo `.env` en la VM:
+- Guardar ambos valores en un archivo `.env` en el VPS:
   ```
   DOCTORJK_LLM_BASE_URL=https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/v1
   DOCTORJK_LLM_MODEL=@cf/moonshotai/kimi-k2.6
@@ -139,7 +139,7 @@ Cloudflare Workers AI con Kimi K2.6 es el motor principal de inferencia del proy
 
 ## Criterio de avance
 
-Un curl desde la VM hacia el endpoint de Cloudflare Workers AI devuelve una respuesta válida del modelo Kimi K2.6.
+Un curl desde el VPS hacia el endpoint de Cloudflare Workers AI devuelve una respuesta válida del modelo Kimi K2.6.
 
 ---
 
@@ -259,7 +259,7 @@ Sin persistencia, un `apt upgrade` que satura la memoria por 20 segundos dispara
 
 ## Criterio de avance
 
-Un pico temporal de una sola lectura NO dispara incidente. Una condición sostenida durante N ciclos SÍ lo dispara. Verificado con ambos escenarios en la VM con carga.
+Un pico temporal de una sola lectura NO dispara incidente. Una condición sostenida durante N ciclos SÍ lo dispara. Verificado con ambos escenarios en el VPS con carga.
 
 ---
 
@@ -920,7 +920,7 @@ El buyer persona (Mateo, sección 2.1) abandona cualquier herramienta que tome m
 
 ## Criterio de avance
 
-Sobre una VM limpia con Ubuntu Server 24.04, ejecutar `install.sh` deja Doctor J/K corriendo como servicio en menos de 15 minutos cronometrados. Sin pasos manuales adicionales excepto proveer las credenciales.
+Sobre un VPS limpio con Ubuntu Server 24.04, ejecutar `install.sh` deja Doctor J/K corriendo como servicio en menos de 15 minutos cronometrados. Sin pasos manuales adicionales excepto proveer las credenciales.
 
 ---
 
@@ -979,7 +979,7 @@ El Modo 2 es corrección determinista (sección 4 del documento de proyecto): "s
 
 ## Criterio de avance
 
-Un incidente de disco lleno se resuelve automáticamente en <2 minutos sin intervención humana (criterio de Fase 7 en el roadmap). Los 4 scripts están probados sobre la VM con los 4 escenarios básicos.
+Un incidente de disco lleno se resuelve automáticamente en <2 minutos sin intervención humana (criterio de Fase 7 en el roadmap). Los 4 scripts están probados sobre el VPS con los 4 escenarios básicos.
 
 ---
 
@@ -1100,7 +1100,7 @@ Sin scripts de provocación estandarizados, cada prueba es manual y no reproduci
 
 ## Criterio de avance
 
-Los 9 scripts de provocación y los 5 de casos negativos están escritos y cada uno reproduce su escenario de forma confiable. Se puede restaurar la VM con snapshot entre pruebas.
+Los 9 scripts de provocación y los 5 de casos negativos están escritos y cada uno reproduce su escenario de forma confiable. Se puede restaurar el VPS desde snapshot entre pruebas.
 
 ---
 
@@ -1142,7 +1142,7 @@ Ejecutar cada escenario 3 veces para medir la consistencia del agente. Son 9 × 
 ## Qué se debe hacer
 
 - Para cada escenario:
-  1. Restaurar la VM al snapshot limpio
+  1. Restaurar el VPS desde el snapshot
   2. Ejecutar el script de provocación (con tráfico de fondo)
   3. Esperar a que el agente detecte, diagnostique y (si aplica) corrija
   4. Guardar el informe generado en `pruebas/resultados/`
@@ -1525,7 +1525,7 @@ El criterio de avance de la Fase 10 dice: "Alguien externo puede leer el README,
 
 ## Criterio de avance
 
-Una persona que no ha visto el proyecto antes puede leer el README, instalar Doctor J/K en una VM limpia en <15 minutos, y entender los 3 modos de operación y cómo consultar informes.
+Una persona que no ha visto el proyecto antes puede leer el README, instalar Doctor J/K en un VPS limpio en <15 minutos, y entender los 3 modos de operación y cómo consultar informes.
 
 ---
 
@@ -1545,7 +1545,7 @@ Empaquetar Doctor J/K para distribución como producto cerrado: paquete instalab
   - **Opción C**: ambos (ideal, si hay tiempo)
 - Empaquetar todo el agente: código compilado/empaquetado, scripts de corrección, prompts, unit de systemd, script de instalación
 - No incluir el código fuente Python legible — usar pyinstaller, nuitka o distribución como wheel cerrado
-- Verificar que el paquete se instala limpiamente en una VM nueva
+- Verificar que el paquete se instala limpiamente en un VPS nuevo
 - Incluir licencia propietaria en el paquete
 
 ## Por qué importa
@@ -1554,7 +1554,7 @@ Doctor J/K es código cerrado (sección 23 del documento de proyecto). Distribui
 
 ## Criterio de avance
 
-El paquete o imagen Docker se instala en una VM limpia sin necesidad de clonar el repositorio. El código fuente no es legible dentro del paquete instalado.
+El paquete o imagen Docker se instala en un VPS limpio sin necesidad de clonar el repositorio. El código fuente no es legible dentro del paquete instalado.
 
 ---
 
@@ -1644,6 +1644,6 @@ El producto actual es independiente por máquina — cada agente vive en su serv
 
 ## Criterio de avance
 
-Un agente en la VM envía un informe al Worker. El informe aparece en el panel web con hostname, timestamp y diagnóstico. El historial persiste entre sesiones.
+Un agente en el VPS envía un informe al Worker. El informe aparece en el panel web con hostname, timestamp y diagnóstico. El historial persiste entre sesiones.
 
 ---

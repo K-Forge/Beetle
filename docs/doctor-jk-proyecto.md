@@ -414,12 +414,11 @@ Los dos hablan formato OpenAI-compatible. Cambiar de proveedor = cambiar 3 varia
 
 | Componente | Elección |
 |---|---|
-| Virtualización | VirtualBox, multipass o Proxmox |
-| SO de la VM | Ubuntu Server 24.04 LTS |
+| Infraestructura | VPS Oracle Always Free (ARM Ampere A1, hasta 4 OCPU / 24 GB RAM / 200 GB disco) |
+| SO | Ubuntu Server 24.04 LTS (ARM64) |
 | Carga realista | Nginx + Postgres + app + cron |
 | Generador de tráfico | `hey` o `wrk` |
-| Restauración | Snapshots |
-| Nube (pruebas no destructivas) | Oracle Always Free (2 OCPU / 12 GB) |
+| Restauración | Snapshots de Oracle (boot volume backups) |
 
 ---
 
@@ -431,7 +430,7 @@ Los dos hablan formato OpenAI-compatible. Cambiar de proveedor = cambiar 3 varia
 |---|---|---|
 | **GitHub** | Código fuente del proyecto | $0 |
 | **Cloudflare** | Token para consumir Kimi K2.6 vía Workers AI | $0 |
-| **Oracle Cloud** (opcional) | VM de prueba en la nube con IP pública | $0 |
+| **Oracle Cloud** | VPS de desarrollo y pruebas con IP pública (propiedad de Brian) | $0 |
 | **DeepSeek** (opcional) | Token de respaldo, recarga mínima | ~$1 |
 
 ### 8.2 Setup de Cloudflare (una sola vez, 10 minutos)
@@ -444,14 +443,14 @@ Los dos hablan formato OpenAI-compatible. Cambiar de proveedor = cambiar 3 varia
 
 ### 8.3 Entorno de desarrollo
 
-**Mínimo (home lab):**
+**Entorno de desarrollo (VPS compartido):**
 
-- Un PC con al menos 8 GB de RAM (para correr la VM invitada con 4 GB)
-- VirtualBox, multipass o Proxmox instalado
-- Una VM Ubuntu Server 24.04 con 4 GB RAM / 20 GB disco
-- Snapshot de la VM limpia (para restaurarla en segundos después de romperla)
+- VPS Oracle Always Free (ARM Ampere A1) — propiedad de Brian
+- Ubuntu Server 24.04 LTS (ARM64)
+- Acceso SSH para todos los miembros del equipo que necesiten operar en el servidor
+- Snapshot de la instancia limpia antes de instalar carga (para restaurar después de pruebas destructivas)
 
-**VM preparada con carga realista:**
+**VPS preparado con carga realista:**
 
 - Nginx sirviendo una app
 - PostgreSQL con ~50.000 filas
@@ -459,10 +458,6 @@ Los dos hablan formato OpenAI-compatible. Cambiar de proveedor = cambiar 3 varia
 - Tráfico de fondo con `hey` o `wrk`
 
 Esto último importa: sin tráfico, los logs están vacíos y los incidentes aparecen obvios. El valor del detector está en encontrar señal entre ruido.
-
-**Oracle Cloud (opcional, para pruebas en nube):**
-
-Si cada miembro del equipo crea su cuenta Oracle Free Tier, cada uno tiene su propia VM independiente. Una se puede dejar corriendo 24/7 con el agente para medir falsos positivos en operación real.
 
 ### 8.4 Estructura del repositorio
 
@@ -511,12 +506,11 @@ doctor-jk/
 | Pieza | Ubicación | Costo |
 |---|---|---|
 | Código fuente | GitHub (repositorio privado) | $0 |
-| Desarrollo y pruebas destructivas | Home lab (VMs locales) | $0 |
+| Desarrollo y pruebas destructivas | VPS Oracle Always Free (Brian) | $0 |
 | Agente en operación | Instalado en el servidor vigilado | $0 |
 | Modelo de IA (Kimi K2.6) | Servidores de Cloudflare — petición HTTP | $0 |
 | Informes | Disco local del servidor vigilado | $0 |
 | Backend + panel (opcional) | Cloudflare Workers, u Oracle Always Free | $0 |
-| Instancia de pruebas en nube | Oracle Always Free | $0 |
 
 **El agente se instala, no se hospeda.** Debe correr en la máquina que vigila porque necesita acceso local a `journalctl`, systemd y el sistema de archivos.
 
@@ -550,9 +544,8 @@ Estas cifras corresponden al desarrollo del prototipo. En producción, el costo 
 
 | Opción | Costo mensual |
 |---|---|
-| Home lab | $0 (electricidad) |
-| Oracle Always Free (2 OCPU / 12 GB) | $0 |
-| Hetzner CX22 (respaldo para demo) | ~€4 |
+| VPS Oracle Always Free (desarrollo + pruebas) | $0 |
+| Hetzner CX22 (respaldo para demo si Oracle falla) | ~€4 |
 
 ### 10.4 Costo total del proyecto (6 meses)
 
@@ -569,8 +562,8 @@ Kimi K2.6 es un modelo de ~1 billón de parámetros. Aunque los pesos son públi
 ### Fase 0 — Preparación (2 días)
 
 1. Crear repositorio en GitHub con la estructura de carpetas
-2. Crear VM Ubuntu Server 24.04 con 4 GB RAM / 20 GB disco
-3. Tomar snapshot de la VM limpia
+2. Configurar VPS Oracle Always Free: Ubuntu Server 24.04 ARM64, Ampere A1 (hasta 4 OCPU / 24 GB RAM / 200 GB), acceso SSH para el equipo
+3. Tomar snapshot del VPS limpio (boot volume backup en Oracle)
 4. Instalar carga realista: Nginx, Postgres con ~50.000 filas, una app, un cron
 5. Crear cuenta Cloudflare, obtener account ID y token de Workers AI
 
@@ -1007,7 +1000,8 @@ Los logs contienen IPs, rutas internas y a veces credenciales. Versiones anterio
 | Guías incomprensibles | Media | Alto | Prueba de comprensibilidad, iteración del prompt |
 | Proveedor de LLM cambia límites | Media | Medio | 2 backends intercambiables (antes 3 con Ollama; mitigación más débil sin respaldo local) |
 | Falla la red durante demo | Media | Alto | Informes pregenerados. Ya no hay modo offline de respaldo (se eliminó el modo Ollama local) |
-| Oracle recorta free tier | Media | Bajo | Desarrollo en home lab; Oracle solo para observación |
+| Oracle recorta free tier o reclama la instancia | Media | **Alto** | Snapshots frecuentes exportables. Si se pierde la instancia, se recrea en Oracle (cada miembro puede crear su propia cuenta free) o se migra a Hetzner CX22 (~€4/mes) |
+| Dependencia de un solo VPS compartido | Media | Alto | Si el VPS de Brian se pierde (Oracle reclama la instancia, error de configuración, cuenta comprometida), el equipo pierde el entorno de desarrollo completo. Mitigación: snapshots frecuentes (al menos antes de cada fase), y que cada miembro del equipo tenga su propia cuenta de Oracle Always Free como respaldo |
 | Cascada no se resuelve bien | Media | Medio | Se reporta como limitación si falla |
 | Modo 3 obligatorio sobrecarga la Fase 9 | Media | Alto | Incluir el Remediador Automático en el alcance obligatorio aumenta la carga de la Fase 9 y reduce el margen de maniobra si la Fase 2 (Detector) se atrasa. Se prioriza sobre extensiones opcionales (backend, panel) si hay que recortar |
 
