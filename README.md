@@ -38,7 +38,7 @@ y las convenciones que debe respetar.
 
 ## Estado
 
-Estructura del repositorio creada (tarea #49). Sin código todavía — la Fase 1 arranca por
+Estructura del repositorio creada (tarea #166). Sin código todavía — la Fase 1 arranca por
 `monitor.py` y `trigger.sh`.
 
 ## Los tres modos

@@ -44,15 +44,17 @@ doctorjk/
 | `sanitizador.py` | Reemplazo consistente dentro del mismo informe | §5.3 |
 | `llm.py` | Un POST; cambiar de proveedor = cambiar 3 variables de entorno | §5.5 |
 | `informe.py` | `<timestamp>_<tipo>.md` + `_evidencia.txt` cruda al lado | §5.3, §13 |
-| `clasificador.py` | Mapeo explícito, sin ambigüedad | tarea #85 |
+| `clasificador.py` | Mapeo explícito, sin ambigüedad | tarea #200 |
 | `remediador.py` | Orquesta Modo 2 y Modo 3; registra cada comando y su resultado | §14 |
 | `planificador.py` | Plan con comando, resultado esperado, condición de continuar y de abortar | §14.3 |
-| `ejecutor.py` | Valida → ejecuta → compara → avanza o aborta | tareas #94, #95 |
+| `ejecutor.py` | Valida → ejecuta → compara → avanza o aborta | tareas #211, #212 |
 | `lista_blanca.py` | Nunca se ejecuta un comando genérico generado libremente | §14.5 |
 
 ## Convenciones
 
-- Nombres de módulos y funciones en español, igual que la documentación del proyecto.
+- Nombres de módulo y de archivo en español, igual que la documentación del proyecto.
+  Dentro del código, los identificadores (funciones, variables, clases) van en inglés y
+  los comentarios en español. Ver la regla cero de `CONTEXTO-IA.md`.
 - El agente se audita con las mismas herramientas que vigila: `logging` a journald.
 - Ningún módulo escribe secretos en disco ni en el log.
 - `sanitizador.py` es el último punto por el que pasa la evidencia antes de salir del servidor;

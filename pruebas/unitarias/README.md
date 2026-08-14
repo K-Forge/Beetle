@@ -25,7 +25,7 @@ el parser contra una salida inventada solo demuestra que el parser entiende lo q
 
 ## Qué debe cubrir `test_sanitizador.py`
 
-Es el test con más peso, porque un fallo aquí filtra datos del cliente (tarea #68):
+Es el test con más peso, porque un fallo aquí filtra datos del cliente (tarea #185):
 
 - IPs en varios formatos: IPv4 con puerto, dentro de URLs, en logs de nginx.
 - **Consistencia**: la misma IP produce el mismo placeholder en todo el informe — es lo que
