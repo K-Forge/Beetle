@@ -123,7 +123,7 @@ Cliente HTTP robusto que habla con el proveedor de IA.
 | 24 | Modo caché | Flag de desarrollo que reutiliza respuestas anteriores en lugar de llamar API (no gastar tokens) |
 | 25 | Fallback sin LLM | Si el modelo no responde, generar informe mínimo con la evidencia cruda etiquetada |
 
-**Criterio de avance:** Llama a Cloudflare (Kimi K2.6, gratis) y DeepSeek (V4 Flash) indistintamente con solo cambiar variables de entorno.
+**Criterio de avance:** Llama a Cloudflare (gpt-oss-120b, gratis) y DeepSeek (V4 Flash) indistintamente con solo cambiar variables de entorno.
 
 **⚠️ Cambio v4.0:** Ya no hay tercer backend. Se eliminó el modo Ollama local por alcance y foco de producto — no porque fuera técnicamente inviable. La mitigación ante cambios de proveedor es más débil que en v3.0 y así queda documentada.
 

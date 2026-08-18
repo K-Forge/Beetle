@@ -142,9 +142,14 @@ aún sin escribir.
 - **Dependencias externas: una sola** (`requests` o `httpx`). Toda recolección usa
   herramientas nativas: `journalctl`, `systemctl`, `df`, `free`, `ss`, `dmesg`,
   `uptime`. **No se agregan dependencias sin justificación explícita y aprobada.**
-- **LLM:** Kimi K2.6 vía Cloudflare Workers AI (principal), DeepSeek V4 Flash
-  (fallback). Backend intercambiable por variable de entorno, formato
-  OpenAI-compatible.
+- **LLM:** gpt-oss-120b vía Cloudflare Workers AI (principal, durante el
+  desarrollo — consume menos neuronas que Kimi K2.6, lo que deja margen para
+  probar sin preocuparse por la cuota gratuita), DeepSeek V4 Flash (fallback).
+  Backend intercambiable por variable de entorno, formato OpenAI-compatible.
+  Al cierre del proyecto se evalúa pasar a una dupla planificador/ejecutor:
+  Kimi K2.6 como planificador y Qwen3-30B-A3B como ejecutor, con el costo
+  ($5/mes, solo el último mes) cubierto personalmente por MauItu — ver
+  sección 14.6 de `docs/doctor-jk-proyecto.md`.
 - **Configuración:** `config.toml` para los parámetros; los secretos solo por
   variable de entorno o `.env`. Ambos archivos están en `.gitignore`.
 - **Persistencia:** archivos `.md` en `/var/lib/doctorjk/informes/`, junto a la
@@ -173,8 +178,12 @@ aún sin escribir.
    decisión de alcance, no una imposibilidad técnica. La privacidad se resuelve
    por sanitización, que es un mecanismo distinto. No reintroducir Ollama, y no
    describirlo como "no funcionó".
-7. Kimi K2.6 no se auto-hospeda: requiere ~1 TB de VRAM (~$25.000/mes en GPUs).
-   Consumirlo por API cuesta $0 en Cloudflare o ~$1.16 en 6 meses con DeepSeek.
+7. gpt-oss-120b no se auto-hospeda: requiere una GPU de datacenter (~80 GB de
+   VRAM). Consumirlo por API cuesta $0 en Cloudflare o ~$1.16 en 6 meses con
+   DeepSeek. Kimi K2.6 (planificador de la dupla planeada para el cierre del
+   proyecto, ver sección 14.6 del documento de proyecto) es aún más extremo:
+   requiere ~1 TB de VRAM (~$25.000/mes en GPUs) — ninguno de los dos se
+   auto-hospeda.
 8. El producto es de código cerrado y se distribuye empaquetado.
 
 Si el agente cree que una de estas decisiones tiene un problema real, **lo dice

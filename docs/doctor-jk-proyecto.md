@@ -268,9 +268,9 @@ La evidencia cruda (sin sanitizar) queda guardada localmente junto al informe, p
 
 ### 5.4 La fase de diagnóstico
 
-La evidencia se envía a Kimi K2.6 (vía Cloudflare Workers AI, gratis) con un prompt estructurado. Kimi lee la evidencia y genera el informe con diagnóstico + guía de solución. El modelo **no toca el servidor** — solo recibe texto y devuelve texto.
+La evidencia se envía a gpt-oss-120b (vía Cloudflare Workers AI, gratis) con un prompt estructurado. El modelo lee la evidencia y genera el informe con diagnóstico + guía de solución. El modelo **no toca el servidor** — solo recibe texto y devuelve texto.
 
-### 5.5 Cómo se comunica el agente con Kimi
+### 5.5 Cómo se comunica el agente con el modelo
 
 No se descarga el modelo. No se instala. No corre en tu infraestructura. Es una petición HTTP:
 
@@ -279,7 +279,7 @@ respuesta = requests.post(
     "https://api.cloudflare.com/client/v4/accounts/{ID}/ai/v1/chat/completions",
     headers={"Authorization": "Bearer TU-TOKEN"},
     json={
-        "model": "@cf/moonshotai/kimi-k2.6",
+        "model": "@cf/openai/gpt-oss-120b",
         "messages": [
             {"role": "system", "content": PROMPT_DIAGNOSTICADOR},
             {"role": "user", "content": evidencia_recolectada}
@@ -288,13 +288,13 @@ respuesta = requests.post(
 )
 ```
 
-La petición sale de tu servidor, viaja por internet hasta los servidores de Cloudflare donde Kimi ya está corriendo en sus GPUs, y vuelve con el diagnóstico redactado. Tarda ~10–15 segundos.
+La petición sale de tu servidor, viaja por internet hasta los servidores de Cloudflare donde el modelo ya está corriendo en sus GPUs, y vuelve con el diagnóstico redactado. Tarda ~10–15 segundos.
 
-El cliente está diseñado con el formato OpenAI-compatible, así que cambiar de proveedor es cambiar tres variables de entorno:
+El cliente está diseñado con el formato OpenAI-compatible, así que cambiar de proveedor o de modelo es cambiar tres variables de entorno:
 
 ```bash
 DOCTORJK_LLM_BASE_URL=https://api.cloudflare.com/client/v4/accounts/{ID}/ai/v1
-DOCTORJK_LLM_MODEL=@cf/moonshotai/kimi-k2.6
+DOCTORJK_LLM_MODEL=@cf/openai/gpt-oss-120b
 DOCTORJK_LLM_API_KEY=...
 ```
 
@@ -397,7 +397,7 @@ Todo con herramientas del sistema, sin dependencias:
 
 | Proveedor | Modelo | Endpoint | Costo |
 |---|---|---|---|
-| Cloudflare Workers AI | Kimi K2.6 | `/accounts/{id}/ai/v1/chat/completions` | Gratis |
+| Cloudflare Workers AI | gpt-oss-120b | `/accounts/{id}/ai/v1/chat/completions` | Gratis |
 | DeepSeek | V4 Flash | `api.deepseek.com/v1` | ~$1.16 por 6 meses |
 
 Los dos hablan formato OpenAI-compatible. Cambiar de proveedor = cambiar 3 variables de entorno.
@@ -508,7 +508,7 @@ doctor-jk/
 | Código fuente | GitHub (repositorio privado) | $0 |
 | Desarrollo y pruebas destructivas | VPS Oracle Always Free (Brian) | $0 |
 | Agente en operación | Instalado en el servidor vigilado | $0 |
-| Modelo de IA (Kimi K2.6) | Servidores de Cloudflare — petición HTTP | $0 |
+| Modelo de IA (gpt-oss-120b) | Servidores de Cloudflare — petición HTTP | $0 |
 | Informes | Disco local del servidor vigilado | $0 |
 | Backend + panel (opcional) | Cloudflare Workers, u Oracle Always Free | $0 |
 
@@ -537,7 +537,7 @@ Estas cifras corresponden al desarrollo del prototipo. En producción, el costo 
 
 | Proveedor | Precio in/out por 1M | Costo total |
 |---|---|---|
-| Cloudflare Workers AI (Kimi K2.6) | Gratis | **$0** |
+| Cloudflare Workers AI (gpt-oss-120b) | Gratis | **$0** |
 | DeepSeek V4 Flash | $0.14 / $0.28 | **$1.16** |
 
 ### 10.3 Infraestructura
@@ -551,9 +551,11 @@ Estas cifras corresponden al desarrollo del prototipo. En producción, el costo 
 
 **Entre $0 y €4/mes.** No requiere GPU, no requiere servidor dedicado, no requiere descargar ningún modelo.
 
-### 10.5 Por qué no se corre Kimi en tu propia máquina
+### 10.5 Por qué no se corre el modelo en tu propia máquina
 
-Kimi K2.6 es un modelo de ~1 billón de parámetros. Aunque los pesos son públicos, necesita ~1 TB de memoria de video (VRAM) — 8 a 16 GPUs de datacenter. Eso cuesta $23–46 por hora o ~$25.000 al mes. Consumirlo por API cuesta $0 (Cloudflare) o $1.16 (DeepSeek) por todo el proyecto. No es una cuestión de configuración — es una cuestión de física de memoria.
+gpt-oss-120b es un modelo de 120B parámetros: necesita una GPU de datacenter con ~80 GB de VRAM (ej. un H100) para correr con buen rendimiento. Consumirlo por API cuesta $0 (Cloudflare) por todo el proyecto. No es una cuestión de configuración — es una cuestión de física de memoria.
+
+Esto es aún más marcado con Kimi K2.6, el modelo elegido como planificador de la dupla final (§14.6): ~1 billón de parámetros, ~1 TB de VRAM (8 a 16 GPUs de datacenter, $23–46 por hora o ~$25.000 al mes de auto-hospedarlo). Por eso ambos modelos se consumen siempre por API, nunca localmente.
 
 ---
 
@@ -903,6 +905,19 @@ Sin importar qué opción se elija:
 - **Lista blanca de comandos:** solo se ejecutan patrones validados (reiniciar servicio, borrar logs en rutas específicas, liberar espacio en directorios predefinidos). Nunca comandos genéricos generados libremente.
 - **Modo `--dry-run`:** muestra qué haría sin ejecutar. Obligatorio durante desarrollo y demo.
 - **Logging de auditoría:** cada comando ejecutado, su resultado, y la decisión del modelo quedan en el informe final.
+
+### 14.6 Decisión confirmada para el cierre del proyecto (2026-08-17)
+
+Durante el desarrollo (fases 0–9) el motor único de diagnóstico es **gpt-oss-120b** vía Cloudflare Workers AI (ver §5.4, §7.3): gratis y consume menos neuronas de Workers AI que Kimi K2.6, lo que deja margen para iterar y probar sin preocuparse por la cuota.
+
+Si al cerrar el proyecto se adopta la Opción B (dupla planificador/ejecutor, tarea #207 y #211), los modelos elegidos son:
+
+| Rol | Modelo |
+|---|---|
+| Planificador / analista | **Kimi K2.6** |
+| Ejecutor | **Qwen3-30B-A3B** |
+
+El costo de esta dupla (suscripción de $5) lo cubre personalmente MauItu, y solo durante el último mes del proyecto — no forma parte del presupuesto de $80 en 6 meses (sección 21). No se calcularon aún los costos por token de Qwen3-30B-A3B ni su disponibilidad exacta como proveedor; se resuelve al implementar #207/#211.
 - **Aborto automático:** si cualquier paso produce un resultado inesperado, el remediador se detiene y escala (notifica, deja el informe, no sigue).
 - **Flag explícito:** el remediador solo se activa con `--auto-fix` o configuración explícita. Por defecto, Doctor J/K solo diagnostica.
 

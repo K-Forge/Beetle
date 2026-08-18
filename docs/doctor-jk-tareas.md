@@ -117,7 +117,7 @@ Nginx responde en el puerto 80, PostgreSQL tiene ~50k filas consultables, el cro
 
 ## Qué es esta tarea
 
-Crear una cuenta en Cloudflare y obtener las credenciales necesarias para consumir Kimi K2.6 vía Workers AI. Es el backend principal de inferencia del proyecto — gratis y sin límite práctico para el volumen del prototipo.
+Crear una cuenta en Cloudflare y obtener las credenciales necesarias para consumir gpt-oss-120b vía Workers AI. Es el backend principal de inferencia del proyecto durante el desarrollo — gratis y sin límite práctico para el volumen del prototipo.
 
 ## Qué se debe hacer
 
@@ -128,18 +128,18 @@ Crear una cuenta en Cloudflare y obtener las credenciales necesarias para consum
 - Guardar ambos valores en un archivo `.env` en el VPS:
   ```
   DOCTORJK_LLM_BASE_URL=https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/v1
-  DOCTORJK_LLM_MODEL=@cf/moonshotai/kimi-k2.6
+  DOCTORJK_LLM_MODEL=@cf/openai/gpt-oss-120b
   DOCTORJK_LLM_API_KEY=...
   ```
 - Verificar con un curl de prueba que el token funciona
 
 ## Por qué importa
 
-Cloudflare Workers AI con Kimi K2.6 es el motor principal de inferencia del proyecto — costo $0 (sección 10 del documento de proyecto). Todo el pipeline de diagnóstico depende de esta conexión. Configurarlo mal bloquea las fases 3–9.
+Cloudflare Workers AI con gpt-oss-120b es el motor principal de inferencia del proyecto durante el desarrollo — costo $0 (sección 10 del documento de proyecto) y consume menos neuronas de Workers AI que Kimi K2.6, lo que permite iterar y probar sin preocuparse por la cuota gratuita. Todo el pipeline de diagnóstico depende de esta conexión. Configurarlo mal bloquea las fases 3–9.
 
 ## Criterio de avance
 
-Un curl desde el VPS hacia el endpoint de Cloudflare Workers AI devuelve una respuesta válida del modelo Kimi K2.6.
+Un curl desde el VPS hacia el endpoint de Cloudflare Workers AI devuelve una respuesta válida del modelo gpt-oss-120b.
 
 ---
 
@@ -478,7 +478,7 @@ Si la evidencia ensamblada supera el presupuesto de ~10k tokens, cortar contenid
 
 ## Por qué importa
 
-Los modelos tienen límite de contexto y el costo de inferencia escala con tokens. Kimi K2.6 vía Cloudflare tiene un límite práctico. Además, evidencia demasiado larga diluye la señal — el modelo puede confundirse con información irrelevante. El truncado mantiene la calidad del diagnóstico dentro del presupuesto de tokens (sección 5.2 del documento de proyecto).
+Los modelos tienen límite de contexto y el costo de inferencia escala con tokens. gpt-oss-120b vía Cloudflare tiene un límite práctico. Además, evidencia demasiado larga diluye la señal — el modelo puede confundirse con información irrelevante. El truncado mantiene la calidad del diagnóstico dentro del presupuesto de tokens (sección 5.2 del documento de proyecto).
 
 ## Criterio de avance
 
@@ -599,7 +599,7 @@ El diseño OpenAI-compatible es deliberado (sección 5.5 del documento de proyec
 
 ## Criterio de avance
 
-El cliente envía evidencia al endpoint de Cloudflare Workers AI y recibe un diagnóstico válido de Kimi K2.6. Cambiar las 3 variables de entorno a DeepSeek produce el mismo resultado sin cambiar código.
+El cliente envía evidencia al endpoint de Cloudflare Workers AI y recibe un diagnóstico válido de gpt-oss-120b. Cambiar las 3 variables de entorno a DeepSeek produce el mismo resultado sin cambiar código.
 
 ---
 
@@ -672,7 +672,7 @@ Implementar un modo caché para desarrollo que reutiliza respuestas anteriores d
 
 ## Por qué importa
 
-Durante el desarrollo de las fases 5 (prompt) y 8 (pruebas), se ejecutan decenas de pruebas con la misma evidencia. Sin caché, cada iteración del prompt cuesta tokens y 10–15 segundos de espera. Con caché, el ciclo de desarrollo es instantáneo. Kimi K2.6 es gratis pero tiene latencia — el caché acelera la iteración.
+Durante el desarrollo de las fases 5 (prompt) y 8 (pruebas), se ejecutan decenas de pruebas con la misma evidencia. Sin caché, cada iteración del prompt cuesta tokens y 10–15 segundos de espera. Con caché, el ciclo de desarrollo es instantáneo. gpt-oss-120b es gratis y consume pocas neuronas de Workers AI, pero sigue teniendo latencia — el caché acelera la iteración.
 
 ## Criterio de avance
 
@@ -1230,6 +1230,8 @@ Implementar la capacidad del modelo para generar un plan de corrección estructu
 
 El Modo 3 es el diferenciador comercial central del producto (sección 14.1 del documento de proyecto). A diferencia del Modo 2 (scripts fijos), el Modo 3 puede corregir incidentes que no tienen script preescrito. Pero esa flexibilidad requiere estructura: el plan explícito con condiciones de aborto es lo que permite ejecutar con las salvaguardas obligatorias.
 
+Si al cierre del proyecto se adopta la Opción B (dupla planificador/ejecutor, sección 14.6 del documento de proyecto), este generador corre sobre **Kimi K2.6** como planificador/analista.
+
 ## Criterio de avance
 
 El modelo genera planes de corrección con el formato estructurado para al menos los 4 escenarios básicos. Cada paso incluye comando, resultado esperado, condición para continuar y condición para abortar.
@@ -1346,6 +1348,8 @@ Implementar el ejecutor que toma el plan de corrección generado por el modelo y
 ## Por qué importa
 
 A diferencia de los scripts del Modo 2 (que ejecutan una secuencia fija), el Modo 3 ejecuta un plan generado por IA. La validación paso a paso es lo que impide que un plan parcialmente incorrecto haga daño: si el paso 2 falla, el paso 3 no se ejecuta. Es la implementación práctica del principio "ejecuta con validación" (sección 14.1 del documento de proyecto).
+
+Si al cierre del proyecto se adopta la Opción B (dupla planificador/ejecutor, sección 14.6 del documento de proyecto), este ejecutor corre sobre **Qwen3-30B-A3B**.
 
 ## Criterio de avance
 
