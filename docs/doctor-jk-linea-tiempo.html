@@ -1,0 +1,1154 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<title>Doctor J/K — Cronograma detallado</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  /* ---------- tokens ---------- */
+  :root{
+    --bg:#eef2f5;
+    --surface:#ffffff;
+    --surface-2:#e4e9ee;
+    --surface-3:#d9dfe6;
+    --ink:#121a22;
+    --ink-muted:#53616d;
+    --ink-faint:#8090a0;
+    --border:#d2dae1;
+    --border-strong:#b7c2cb;
+
+    --done-bg:#e0f1e6; --done-fg:#1f6b41; --done-bd:#b6ddc2;
+    --crit-bg:#fbe3e0; --crit-fg:#9c2e22; --crit-bd:#f0b5ab;
+    --safe-bg:#e7e6fa; --safe-fg:#4a3ec0; --safe-bd:#c7c3f0;
+    --amber-bg:#fbead2; --amber-fg:#8a5e0e; --amber-bd:#eecf9a;
+    --ready:#147a70;
+    --today:#c1471f;
+
+    --shadow: 0 1px 2px rgba(18,26,34,.04), 0 8px 24px -12px rgba(18,26,34,.18);
+    --radius: 10px;
+    --font-display:"IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --font-body:"IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --font-mono:"IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0e151c;
+      --surface:#161f28;
+      --surface-2:#1d2833;
+      --surface-3:#26323e;
+      --ink:#e8edf1;
+      --ink-muted:#9aabb8;
+      --ink-faint:#677887;
+      --border:#2b3844;
+      --border-strong:#3a4954;
+
+      --done-bg:#153524; --done-fg:#72d59c; --done-bd:#1e4c33;
+      --crit-bg:#3a1913; --crit-fg:#f19686; --crit-bd:#5c2a1f;
+      --safe-bg:#211f42; --safe-fg:#b6b0f5; --safe-bd:#332f66;
+      --amber-bg:#392a10; --amber-fg:#e9bd6c; --amber-bd:#573f17;
+      --ready:#39c2b3;
+      --today:#e9713f;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0e151c;
+    --surface:#161f28;
+    --surface-2:#1d2833;
+    --surface-3:#26323e;
+    --ink:#e8edf1;
+    --ink-muted:#9aabb8;
+    --ink-faint:#677887;
+    --border:#2b3844;
+    --border-strong:#3a4954;
+
+    --done-bg:#153524; --done-fg:#72d59c; --done-bd:#1e4c33;
+    --crit-bg:#3a1913; --crit-fg:#f19686; --crit-bd:#5c2a1f;
+    --safe-bg:#211f42; --safe-fg:#b6b0f5; --safe-bd:#332f66;
+    --amber-bg:#392a10; --amber-fg:#e9bd6c; --amber-bd:#573f17;
+    --ready:#39c2b3;
+    --today:#e9713f;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:var(--font-body);
+    font-size:15px;
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  ::selection{ background:var(--amber-bd); color:var(--ink); }
+  a{ color:inherit; }
+  button{ font-family:inherit; }
+
+  .app{ max-width:1280px; margin:0 auto; padding:28px 24px 80px; }
+
+  /* ---------- header ---------- */
+  .topbar{
+    display:flex; align-items:flex-start; justify-content:space-between; gap:24px;
+    flex-wrap:wrap;
+    padding-bottom:22px; margin-bottom:22px;
+    border-bottom:1px solid var(--border);
+  }
+  .brand{ display:flex; gap:14px; align-items:flex-start; }
+  .brand-mark{
+    font-family:var(--font-mono); font-weight:600; font-size:13px; letter-spacing:.04em;
+    background:var(--ink); color:var(--bg);
+    padding:6px 9px; border-radius:6px; margin-top:3px;
+  }
+  :root[data-theme="dark"] .brand-mark,
+  @media (prefers-color-scheme: dark){ .brand-mark{ } }
+  h1{
+    font-family:var(--font-display); font-weight:700; font-size:26px; letter-spacing:-.01em;
+    margin:0 0 4px; text-wrap:balance;
+  }
+  .subtitle{ margin:0; color:var(--ink-muted); font-size:14px; }
+  .subtitle b{ color:var(--ink); font-weight:600; }
+
+  .stats{ display:flex; gap:10px; flex-wrap:wrap; align-items:stretch; }
+  .stat{
+    background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+    padding:9px 14px; min-width:96px; box-shadow:var(--shadow);
+  }
+  .stat .num{ font-family:var(--font-mono); font-weight:600; font-size:19px; display:block; line-height:1.1; }
+  .stat .lbl{ font-size:11px; color:var(--ink-muted); text-transform:uppercase; letter-spacing:.06em; }
+  .stat.done .num{ color:var(--done-fg); }
+  .stat.crit .num{ color:var(--crit-fg); }
+  .stat.safe .num{ color:var(--safe-fg); }
+  .stat.ready .num{ color:var(--ready); }
+
+  .progress-wrap{ margin-top:14px; }
+  .progress-track{
+    height:8px; border-radius:5px; background:var(--surface-2);
+    overflow:hidden; display:flex; border:1px solid var(--border);
+  }
+  .progress-fill{ background:var(--done-fg); height:100%; transition:width .4s ease; }
+  .progress-label{ font-size:12px; color:var(--ink-muted); margin-top:6px; font-family:var(--font-mono); }
+
+  /* ---------- toolbar ---------- */
+  .toolbar{
+    display:flex; align-items:center; justify-content:space-between; gap:16px;
+    flex-wrap:wrap; margin-bottom:20px;
+  }
+  .filters{ display:flex; gap:8px; flex-wrap:wrap; }
+  .chip{
+    font-family:var(--font-body); font-size:13px; font-weight:500;
+    padding:7px 13px; border-radius:999px; border:1px solid var(--border);
+    background:var(--surface); color:var(--ink-muted); cursor:pointer;
+    transition:background .15s, color .15s, border-color .15s;
+  }
+  .chip:hover{ border-color:var(--border-strong); color:var(--ink); }
+  .chip:focus-visible{ outline:2px solid var(--ready); outline-offset:2px; }
+  .chip.active{ background:var(--ink); color:var(--bg); border-color:var(--ink); }
+  .chip-critical.active{ background:var(--crit-fg); border-color:var(--crit-fg); color:#fff; }
+  .chip-safeguard.active{ background:var(--safe-fg); border-color:var(--safe-fg); color:#fff; }
+  .chip-ready.active{ background:var(--ready); border-color:var(--ready); color:#fff; }
+
+  .search input{
+    font-family:var(--font-body); font-size:13.5px;
+    padding:8px 14px; border-radius:999px; border:1px solid var(--border);
+    background:var(--surface); color:var(--ink); width:260px; max-width:60vw;
+  }
+  .search input:focus-visible{ outline:2px solid var(--ready); outline-offset:1px; }
+  .search input::placeholder{ color:var(--ink-faint); }
+
+  /* ---------- cards ---------- */
+  .card{
+    background:var(--surface); border:1px solid var(--border); border-radius:14px;
+    padding:22px 22px 20px; margin-bottom:20px; box-shadow:var(--shadow);
+  }
+  .card h2{
+    font-family:var(--font-display); font-size:16px; font-weight:600; margin:0 0 4px;
+    display:flex; align-items:center; gap:8px;
+  }
+  .card .card-note{ color:var(--ink-muted); font-size:13px; margin:0 0 16px; max-width:78ch; }
+  .eyebrow{
+    font-family:var(--font-mono); font-size:11px; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--ink-faint); margin:0 0 6px;
+  }
+
+  /* ---------- dependency diagram ---------- */
+  .diagram-scroll{ overflow-x:auto; padding-bottom:6px; }
+  .diagram-scroll svg{ display:block; min-width:900px; }
+  .dnode rect{ stroke-width:1.3px; }
+  .dnode text{ font-family:var(--font-body); }
+  .dnode .dnum{ font-family:var(--font-mono); font-weight:600; }
+  .dedge{ fill:none; stroke:var(--border-strong); stroke-width:1.6px; }
+  .dedge.dashed{ stroke-dasharray:4 4; stroke:var(--ink-faint); }
+  .dedge.critpath{ stroke:var(--crit-fg); stroke-width:2.2px; }
+  .darrow{ fill:var(--border-strong); }
+  .darrow.critpath{ fill:var(--crit-fg); }
+
+  /* ---------- gantt ---------- */
+  .gantt-scroll{ overflow-x:auto; border:1px solid var(--border); border-radius:10px; }
+  .gantt{ min-width:max-content; }
+  .ruler{ display:flex; position:sticky; top:0; background:var(--surface); z-index:3; border-bottom:1px solid var(--border-strong); }
+  .ruler-label{ flex:0 0 230px; border-right:1px solid var(--border); }
+  .ruler-track{ position:relative; }
+  .week-row{ display:flex; height:22px; border-bottom:1px solid var(--border); }
+  .week-cell{
+    flex:0 0 auto; font-family:var(--font-mono); font-size:10.5px; color:var(--ink-muted);
+    display:flex; align-items:center; padding-left:6px; border-right:1px dashed var(--border);
+  }
+  .day-row{ display:flex; height:20px; }
+  .day-cell{
+    flex:0 0 24px; font-family:var(--font-mono); font-size:9px; color:var(--ink-faint);
+    display:flex; align-items:center; justify-content:center; border-right:1px solid var(--surface-2);
+  }
+  .today-flag{
+    position:absolute; top:0; bottom:0; left:0; width:2px; background:var(--today); z-index:2;
+  }
+  .today-flag::after{
+    content:"HOY"; position:absolute; top:-1px; left:4px; font-family:var(--font-mono);
+    font-size:9px; font-weight:600; color:var(--today); white-space:nowrap;
+  }
+
+  .phase-block{ border-bottom:1px solid var(--border); }
+  .phase-block:last-child{ border-bottom:none; }
+  .phase-divider{
+    display:flex; align-items:center; gap:10px; background:var(--surface-2);
+    padding:6px 14px 6px 0;
+  }
+  .phase-divider .plabel{
+    flex:0 0 230px; padding-left:14px; display:flex; flex-direction:column; gap:1px;
+  }
+  .phase-divider .ptitle{ font-weight:600; font-size:12.5px; }
+  .phase-divider .pmeta{ font-size:10.5px; color:var(--ink-muted); font-family:var(--font-mono); }
+  .phase-divider.is-critical{ border-left:3px solid var(--crit-fg); }
+  .phase-divider.is-obligatoria{ border-left:3px solid var(--safe-fg); }
+  .phase-divider.is-parallel{ border-left:3px solid var(--ready); }
+  .phase-divider .pflex{ flex:1; }
+  .phase-divider .pbadge{
+    font-family:var(--font-mono); font-size:10px; padding:2px 7px; border-radius:5px;
+    background:var(--surface); border:1px solid var(--border); color:var(--ink-muted);
+  }
+
+  .lane-row{ display:flex; height:32px; align-items:center; }
+  .lane-row:nth-of-type(odd) .lane-track{ background:transparent; }
+  .lane-label{ flex:0 0 230px; }
+  .lane-track{ position:relative; height:100%; }
+
+  .bar{
+    position:absolute; top:4px; height:24px; border-radius:6px;
+    border:1px solid var(--border); background:var(--surface-2); color:var(--ink);
+    font-family:var(--font-mono); font-size:11px; font-weight:500;
+    display:flex; align-items:center; padding:0 8px; gap:6px; white-space:nowrap; overflow:hidden;
+    cursor:pointer; transition:filter .12s, transform .12s, opacity .2s;
+  }
+  .bar:hover{ filter:brightness(1.04); transform:translateY(-1px); }
+  .bar:focus-visible{ outline:2px solid var(--ready); outline-offset:1px; }
+  .bar .bnum{ opacity:.7; }
+  .bar .btitle{ overflow:hidden; text-overflow:ellipsis; font-family:var(--font-body); font-weight:500; }
+  .bar.st-done{ background:var(--done-bg); color:var(--done-fg); border-color:var(--done-bd); }
+  .bar.st-critical{ background:var(--crit-bg); color:var(--crit-fg); border-color:var(--crit-bd); }
+  .bar.st-safeguard{ background:var(--safe-bg); color:var(--safe-fg); border-color:var(--safe-bd); }
+  .bar.st-optional{ background:transparent; color:var(--ink-faint); border-style:dashed; }
+  .bar .readydot{
+    width:6px; height:6px; border-radius:50%; background:var(--ready); flex:0 0 auto;
+    box-shadow:0 0 0 2px color-mix(in srgb, var(--ready) 30%, transparent);
+  }
+  .bar.dim{ opacity:.16; }
+  .bar.flash{ animation:flashbar 1.1s ease; }
+  @keyframes flashbar{
+    0%{ box-shadow:0 0 0 4px color-mix(in srgb, var(--ready) 55%, transparent); }
+    100%{ box-shadow:0 0 0 0 transparent; }
+  }
+
+  .legend{
+    display:flex; flex-wrap:wrap; gap:14px; margin-top:16px; padding-top:14px;
+    border-top:1px solid var(--border); font-size:12.5px; color:var(--ink-muted);
+  }
+  .legend .litem{ display:flex; align-items:center; gap:7px; }
+  .swatch{ width:14px; height:14px; border-radius:4px; border:1px solid var(--border); flex:0 0 auto; }
+  .swatch.st-done{ background:var(--done-bg); border-color:var(--done-bd); }
+  .swatch.st-critical{ background:var(--crit-bg); border-color:var(--crit-bd); }
+  .swatch.st-safeguard{ background:var(--safe-bg); border-color:var(--safe-bd); }
+  .swatch.st-optional{ background:transparent; border-style:dashed; }
+  .swatch.dotwrap{ display:flex; align-items:center; justify-content:center; background:var(--surface-2); }
+
+  /* ---------- ready callout ---------- */
+  .callout{
+    display:flex; gap:12px; align-items:flex-start; background:var(--amber-bg);
+    border:1px solid var(--amber-bd); color:var(--amber-fg); border-radius:10px;
+    padding:14px 16px; margin-bottom:20px; font-size:13.5px;
+  }
+  .callout b{ font-weight:700; }
+  .callout .callout-chips{ display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+  .callout .cchip{
+    font-family:var(--font-mono); font-size:11.5px; font-weight:600; padding:2px 8px;
+    border-radius:5px; background:var(--surface); border:1px solid var(--amber-bd); color:var(--amber-fg);
+    cursor:pointer;
+  }
+
+  /* ---------- phase accordion ---------- */
+  details.phase-acc{
+    background:var(--surface); border:1px solid var(--border); border-radius:12px;
+    margin-bottom:10px; overflow:hidden;
+  }
+  details.phase-acc summary{
+    list-style:none; cursor:pointer; padding:14px 18px; display:flex; align-items:center; gap:12px;
+    font-family:var(--font-display); font-weight:600; font-size:14.5px;
+  }
+  details.phase-acc summary::-webkit-details-marker{ display:none; }
+  details.phase-acc summary::before{
+    content:"›"; display:inline-block; font-size:18px; color:var(--ink-faint);
+    transition:transform .15s; width:14px;
+  }
+  details.phase-acc[open] summary::before{ transform:rotate(90deg); }
+  details.phase-acc summary .sn{ font-family:var(--font-mono); color:var(--ink-faint); font-weight:500; }
+  details.phase-acc summary .stag{
+    margin-left:auto; font-family:var(--font-mono); font-size:11px; color:var(--ink-muted);
+    font-weight:400; white-space:nowrap;
+  }
+  .acc-body{ padding:0 18px 16px; }
+  .acc-meta{ font-size:12.5px; color:var(--ink-muted); margin:-4px 0 14px; }
+  .issue-row{
+    display:grid; grid-template-columns:60px 1fr auto; gap:10px 16px; align-items:baseline;
+    padding:11px 0; border-top:1px solid var(--border);
+  }
+  .issue-row:first-of-type{ border-top:none; }
+  .issue-row .iid{ font-family:var(--font-mono); font-weight:600; color:var(--ink-faint); font-size:13px; }
+  .issue-row .ititle{ font-weight:600; font-size:13.5px; grid-column:2; }
+  .issue-row .pill{
+    font-family:var(--font-mono); font-size:10px; padding:2px 7px; border-radius:5px; font-weight:600;
+    justify-self:end;
+  }
+  .pill.st-done{ background:var(--done-bg); color:var(--done-fg); border:1px solid var(--done-bd); }
+  .pill.st-open{ background:var(--surface-2); color:var(--ink-muted); border:1px solid var(--border); }
+  .issue-body{ grid-column:1 / -1; font-size:13px; color:var(--ink-muted); margin-top:2px; }
+  .issue-body p{ margin:3px 0; }
+  .issue-body .why b{ color:var(--ink); font-weight:600; }
+  .depchips{ display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+  .depchip{
+    font-family:var(--font-mono); font-size:11px; font-weight:600; padding:1px 7px;
+    border-radius:5px; background:var(--surface-2); border:1px solid var(--border); cursor:pointer; color:var(--ink);
+  }
+  .depchip:hover{ border-color:var(--border-strong); }
+  .tagrow{ display:flex; gap:6px; margin-top:6px; }
+  .tag{ font-family:var(--font-mono); font-size:10px; padding:2px 6px; border-radius:5px; font-weight:600; }
+  .tag.crit{ background:var(--crit-bg); color:var(--crit-fg); border:1px solid var(--crit-bd); }
+  .tag.safe{ background:var(--safe-bg); color:var(--safe-fg); border:1px solid var(--safe-bd); }
+  .tag.opt{ background:var(--surface-2); color:var(--ink-faint); border:1px dashed var(--border-strong); }
+
+  /* ---------- drawer ---------- */
+  .scrim{
+    position:fixed; inset:0; background:rgba(10,14,18,.38); backdrop-filter:blur(1px);
+    opacity:0; pointer-events:none; transition:opacity .2s; z-index:10;
+  }
+  .scrim.show{ opacity:1; pointer-events:auto; }
+  .drawer{
+    position:fixed; top:0; right:0; height:100%; width:min(420px, 92vw);
+    background:var(--surface); border-left:1px solid var(--border);
+    box-shadow:-16px 0 32px -12px rgba(10,14,18,.28);
+    transform:translateX(100%); transition:transform .25s ease; z-index:11;
+    overflow-y:auto; padding:22px 22px 40px;
+  }
+  .drawer.show{ transform:translateX(0); }
+  .drawer-close{
+    position:absolute; top:16px; right:16px; background:var(--surface-2); border:1px solid var(--border);
+    width:30px; height:30px; border-radius:8px; cursor:pointer; color:var(--ink-muted); font-size:14px;
+  }
+  .drawer-close:hover{ color:var(--ink); }
+  .dw-id{ font-family:var(--font-mono); color:var(--ink-faint); font-size:13px; }
+  .dw-title{ font-family:var(--font-display); font-weight:700; font-size:19px; margin:4px 0 12px; text-wrap:balance; }
+  .dw-tags{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px; }
+  .dw-section{ margin-bottom:16px; }
+  .dw-section h4{
+    font-family:var(--font-mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.07em;
+    color:var(--ink-faint); margin:0 0 6px; font-weight:600;
+  }
+  .dw-section p{ margin:0; font-size:13.5px; color:var(--ink-muted); }
+  .dw-dates{ font-family:var(--font-mono); font-size:12.5px; color:var(--ink); }
+
+  footer{ margin-top:28px; padding-top:20px; border-top:1px solid var(--border); }
+  footer p{ font-size:12.5px; color:var(--ink-faint); max-width:80ch; }
+  footer a{ color:var(--ink-muted); text-decoration:underline; text-underline-offset:2px; }
+
+  @media (prefers-reduced-motion: reduce){
+    *{ animation-duration:0.001ms !important; transition-duration:0.001ms !important; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">DJK</span>
+      <div class="brand-text">
+        <h1>Doctor J/K — Cronograma detallado</h1>
+        <p class="subtitle">56 issues (<b>#166–#221</b>) · 11 fases · proyección con paralelismo máximo desde hoy</p>
+      </div>
+    </div>
+    <div class="stats" id="stats"></div>
+  </header>
+
+  <div class="progress-wrap">
+    <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+    <div class="progress-label" id="progressLabel"></div>
+  </div>
+
+  <div class="callout" id="readyCallout" style="margin-top:20px;">
+    <div>
+      <div><b>Listos para empezar ahora mismo</b> — dependencias ya cerradas, nada los bloquea:</div>
+      <div class="callout-chips" id="readyChips"></div>
+    </div>
+  </div>
+
+  <section class="toolbar">
+    <div class="filters" id="filters">
+      <button class="chip active" data-filter="all">Todos</button>
+      <button class="chip" data-filter="open">Abiertos</button>
+      <button class="chip" data-filter="closed">Cerrados</button>
+      <button class="chip chip-critical" data-filter="critical">Ruta crítica</button>
+      <button class="chip chip-safeguard" data-filter="safeguard">Salvaguardas</button>
+      <button class="chip chip-ready" data-filter="ready">Listos para empezar</button>
+    </div>
+    <div class="search">
+      <input id="search" type="search" placeholder="Buscar por número o palabra…" autocomplete="off" />
+    </div>
+  </section>
+
+  <section class="card">
+    <p class="eyebrow">Vista general</p>
+    <h2>Mapa de dependencias entre fases</h2>
+    <p class="card-note">La Fase 2 (Detector) es el único nodo que bloquea todo lo que sigue. Fase 3 y Fase 4 solo dependen de Fase 2 —no una de la otra— así que corren en paralelo. Fase 5 puede arrancar temprano con evidencia simulada, pero su iteración real queda atada al cliente LLM de Fase 4 (línea punteada).</p>
+    <div class="diagram-scroll">
+      <svg id="depSvg" viewBox="0 0 1300 300" width="1300" height="300" role="img" aria-label="Diagrama de dependencias entre fases"></svg>
+    </div>
+  </section>
+
+  <section class="card">
+    <p class="eyebrow">Detalle · los 56 issues</p>
+    <h2>Línea de tiempo</h2>
+    <p class="card-note">
+      Cada barra es un issue de GitHub, posicionada según su lógica de dependencias (no según fechas oficiales del roadmap). Verde = cerrado. Rojo = ruta crítica (Fase 2). Violeta = salvaguarda del Modo 3 (nunca se recorta). Punto teal = listo para empezar hoy. Barras que arrancan el mismo día = se pueden hacer al mismo tiempo. Click en una barra para ver el detalle completo.
+    </p>
+    <div class="gantt-scroll">
+      <div class="gantt" id="gantt"></div>
+    </div>
+    <div class="legend">
+      <div class="litem"><span class="swatch st-done"></span> Cerrado</div>
+      <div class="litem"><span class="swatch"></span> Abierto</div>
+      <div class="litem"><span class="swatch st-critical"></span> Ruta crítica (Fase 2)</div>
+      <div class="litem"><span class="swatch st-safeguard"></span> Salvaguarda (Fase 9, innegociable)</div>
+      <div class="litem"><span class="swatch st-optional"></span> Opcional (primero en recortarse)</div>
+      <div class="litem"><span class="swatch dotwrap"><span class="readydot"></span></span> Listo para empezar hoy</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <p class="eyebrow">Fase por fase</p>
+    <h2>Detalle completo por issue</h2>
+    <p class="card-note">Estado oficial, dependencias, por qué importa cada tarea y su criterio de avance, agrupado por fase. Los números de dependencia son clicables y saltan a la barra correspondiente arriba.</p>
+    <div id="phases"></div>
+  </section>
+
+  <footer>
+    <p>
+      Cronograma derivado de <code>docs/doctor-jk-roadmap.md</code> (dependencias oficiales por fase) y
+      <code>docs/doctor-jk-tareas.md</code> (detalle de cada issue). Las fechas y el orden dentro de cada fase son una
+      <b>proyección propia</b> asumiendo el máximo paralelismo posible según la lógica de cada tarea — con eso el proyecto
+      se comprime a unas 8 semanas en vez de las 10 del roadmap oficial, que asume un equipo pequeño compartiendo fases y
+      por lo tanto menos paralelismo real. Orden de recorte si hay atraso: 1) #221 (backend opcional), 2) #218
+      (empaquetado), 3) alcance de #205 (de 3 a 2 corridas por escenario). Nunca se recortan las salvaguardas de Fase 9
+      (#208, #209, #210, #212, #213) ni las fases 2, 7 u 8 completas.
+    </p>
+  </footer>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <button class="drawer-close" id="drawerClose" aria-label="Cerrar">✕</button>
+  <div id="drawerContent"></div>
+</aside>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ================= DATA ================= */
+
+  var PHASES = [
+    {n:0, name:"Preparación", dur:"2 días", week:"Semana 1", deps:"Ninguna", tag:""},
+    {n:1, name:"Monitor + Trigger", dur:"3 días", week:"Semana 1", deps:"Fase 0", tag:""},
+    {n:2, name:"Detector", dur:"2 semanas", week:"Semanas 2–3", deps:"Fase 1", tag:"critical"},
+    {n:3, name:"Recolector + Sanitización", dur:"5 días", week:"Semana 4", deps:"Fase 2 · en paralelo con Fase 4", tag:""},
+    {n:4, name:"Cliente LLM", dur:"2 días", week:"Semana 4", deps:"Fase 2 · en paralelo con Fase 3", tag:""},
+    {n:5, name:"Prompt", dur:"1 semana", week:"Semana 5 (desde semana 3)", deps:"Fase 2, evidencia simulada", tag:"parallel"},
+    {n:6, name:"Persistencia y Systemd", dur:"3 días", week:"Semana 6", deps:"Fase 4", tag:""},
+    {n:7, name:"Remediador Scripts — Modo 2", dur:"1 semana", week:"Semana 7", deps:"Fase 6", tag:""},
+    {n:8, name:"Pruebas y Medición", dur:"1 semana", week:"Semana 8", deps:"Fases 2–7", tag:""},
+    {n:9, name:"Remediador Automático — Modo 3", dur:"1 semana", week:"Semana 9", deps:"Fases 2–8", tag:"obligatoria"},
+    {n:10, name:"Documentación y Entrega", dur:"1 semana", week:"Semana 10", deps:"Todas", tag:""}
+  ];
+
+  // id, phase, title, status(open/closed), start, dur (business days), deps[], critical, safeguard, optional, why, crit
+  var ISSUES = [
+  {id:166,phase:0,title:"Crear repositorio privado en GitHub",status:"closed",start:0,dur:1,deps:[],
+    why:"Nada se puede versionar ni compartir sin el repo. Es privado porque el producto es de código cerrado.",
+    crit:"Repo privado con estructura de carpetas, .gitignore y README base; todo el equipo con acceso."},
+  {id:170,phase:0,title:"Configurar Cloudflare",status:"closed",start:0,dur:1,deps:[],
+    why:"Cloudflare Workers AI con gpt-oss-120b es el motor de inferencia gratuito del proyecto; todo el pipeline de diagnóstico depende de esta conexión.",
+    crit:"Un curl desde el VPS al endpoint de Cloudflare devuelve una respuesta válida del modelo."},
+  {id:167,phase:0,title:"Configurar VPS Oracle Always Free",status:"closed",start:1,dur:1,deps:[166],
+    why:"Es el servidor donde se instala, ejecuta y prueba Doctor J/K durante todo el proyecto.",
+    crit:"VPS accesible por SSH para Brian y Mauricio, Ubuntu 24.04 funcional, recursos verificados."},
+  {id:169,phase:0,title:"Instalar carga realista",status:"closed",start:2,dur:1,deps:[167],
+    why:"El detector necesita ruido real (Nginx, Postgres, cron, tráfico) para distinguir incidentes de picos normales.",
+    crit:"Nginx responde, Postgres con unas 50 mil filas, cron corriendo cada minuto, journalctl con actividad real."},
+  {id:168,phase:0,title:"Snapshot de VPS limpio",status:"open",start:2,dur:1,deps:[167],
+    why:"Punto de restauración rápido para las pruebas destructivas de Fase 8; sin él, cada prueba requeriría reinstalar el sistema operativo entero.",
+    crit:"El VPS se restaura desde el snapshot; tiempo real de restauración documentado (5 a 15 minutos)."},
+
+  {id:171,phase:1,title:"Monitor con polling",status:"open",start:3,dur:2,deps:[167,169],
+    why:"Vigilancia pasiva cada 30 segundos: servicios, disco, memoria, puertos y carga. Alimenta al detector.",
+    crit:"El script corre más de 1 hora sin errores, con lecturas coherentes y sin impactar el rendimiento del servidor."},
+  {id:172,phase:1,title:"Trigger bash en tiempo real",status:"open",start:3,dur:2,deps:[167,169],
+    why:"El polling tiene hasta 30s de delay; el trigger detecta eventos puntuales (OOM, servicio caído) al instante vía journalctl -f.",
+    crit:"Un error provocado se detecta y dispara el agente en menos de 2 segundos."},
+  {id:173,phase:1,title:"Normalizar señales",status:"open",start:5,dur:1,deps:[171,172],
+    why:"Interfaz única entre la capa de detección y el detector; sin ella cada tipo de señal necesitaría lógica propia.",
+    crit:"Todas las lecturas del monitor y del trigger se convierten al diccionario normalizado."},
+
+  {id:174,phase:2,title:"Contadores de persistencia",status:"open",start:6,dur:3,deps:[173],critical:true,
+    why:"Distingue un pico temporal (por ejemplo un apt upgrade) de un incidente real, exigiendo N ciclos consecutivos.",
+    crit:"Un pico de una sola lectura no dispara incidente; una condición sostenida durante N ciclos sí."},
+  {id:175,phase:2,title:"Umbrales configurables",status:"open",start:6,dur:2,deps:[173],critical:true,
+    why:"Cada servidor necesita umbrales distintos de RAM y disco; un archivo TOML permite ajustar sin tocar código.",
+    crit:"Cambiar un valor en config.toml cambia el comportamiento del detector sin tocar el código."},
+  {id:176,phase:2,title:"Máquina de estados",status:"open",start:9,dur:3,deps:[174,175],critical:true,
+    why:"Modela el ciclo de vida completo del incidente y evita que un incidente ya activo vuelva a dispararse.",
+    crit:"Las 4 transiciones (normal, candidato, incidente, resuelto) funcionan correctamente en los 4 escenarios básicos."},
+  {id:177,phase:2,title:"Deduplicación",status:"open",start:12,dur:2,deps:[176],critical:true,
+    why:"Sin esto, un disco al 95% generaría un informe nuevo cada 60 segundos, saturando tokens y disco.",
+    crit:"Un incidente activo no genera un segundo informe hasta que se resuelve por completo."},
+  {id:178,phase:2,title:"Registro de decisiones",status:"open",start:12,dur:2,deps:[176],critical:true,
+    why:"Trazabilidad de por qué el detector disparó, descartó o suprimió cada señal; clave para depurar falsos positivos y negativos.",
+    crit:"Cada decisión queda registrada en journald con las señales involucradas, el contador y la razón."},
+
+  {id:179,phase:3,title:"Recorte de ventana temporal",status:"open",start:14,dur:1,deps:[177,178],
+    why:"Captura de 5 minutos antes a 1 minuto después del incidente: ni todo el log del servidor ni solo la última línea.",
+    crit:"Los logs recolectados cubren exactamente la ventana temporal definida, sin nada fuera de rango."},
+  {id:180,phase:3,title:"Filtrado por prioridad",status:"open",start:15,dur:1,deps:[179],
+    why:"Descarta mensajes info y debug para bajar el volumen de tokens sin perder la señal de causa raíz.",
+    crit:"Solo quedan mensajes de warning o superior; el volumen baja al menos un 50%."},
+  {id:181,phase:3,title:"Ensamblado de evidencia",status:"open",start:16,dur:1,deps:[180],
+    why:"Arma el documento de 5 secciones (metadatos, logs, snapshot, cambios recientes, historial) que el modelo necesita para diagnosticar.",
+    crit:"Bloque completo con las 5 secciones etiquetadas, con menos de 12 mil tokens."},
+  {id:182,phase:3,title:"Truncado inteligente",status:"open",start:17,dur:1,deps:[181],
+    why:"Si la evidencia supera unos 10 mil tokens, recorta primero los logs antiguos, nunca los metadatos ni la sección de error.",
+    crit:"Una evidencia de 15 mil tokens se trunca a unos 10 mil sin perder metadatos ni error, con nota de truncado."},
+  {id:183,phase:3,title:"Guardar evidencia cruda",status:"open",start:17,dur:1,deps:[181],
+    why:"Copia sin sanitizar en disco local para que el administrador audite qué se recolectó frente a qué se envió al modelo.",
+    crit:"Cada informe tiene su archivo _evidencia.txt sin sanitizar; nunca sale del servidor."},
+  {id:184,phase:3,title:"Módulo sanitizador",status:"open",start:17,dur:2,deps:[181],
+    why:"Enmascara IPs, credenciales, rutas de usuario y claves SSH antes de que la evidencia salga del servidor hacia el LLM.",
+    crit:"Ninguna IP, credencial, token o ruta de usuario llega al LLM sin enmascarar."},
+  {id:185,phase:3,title:"Pruebas del sanitizador",status:"open",start:19,dur:1,deps:[184],
+    why:"La sanitización por regex no es exhaustiva; hay que probar los casos cubiertos y documentar honestamente los que no.",
+    crit:"Tests al 100% en los patrones definidos, más un documento de limitaciones con al menos 3 escenarios no cubiertos."},
+
+  {id:186,phase:4,title:"Cliente OpenAI-compatible",status:"open",start:14,dur:1,deps:[177,178],
+    why:"Conecta recolección con diagnóstico; el formato OpenAI-compatible permite cambiar de proveedor con solo 3 variables de entorno.",
+    crit:"El cliente envía evidencia a Cloudflare y recibe un diagnóstico válido de gpt-oss-120b."},
+  {id:189,phase:4,title:"Modo caché",status:"open",start:15,dur:1,deps:[186],
+    why:"Evita gastar tokens y tiempo reiterando el mismo prompt durante el desarrollo de las Fases 5 y 8.",
+    crit:"Con DOCTORJK_CACHE=true, la segunda ejecución con la misma evidencia responde al instante."},
+  {id:187,phase:4,title:"Manejo de errores",status:"open",start:15,dur:1,deps:[186],
+    why:"El agente corre 24/7 sin supervisión; timeouts, rate limits y respuestas malformadas no pueden crashear el proceso.",
+    crit:"El cliente sobrevive a un timeout, un rate limit y una respuesta vacía sin quedarse colgado."},
+  {id:188,phase:4,title:"Reintentos con backoff",status:"open",start:16,dur:1,deps:[187],
+    why:"Los proveedores de LLM tienen fallos transitorios; un solo intento fallido a las 3am no debería dejar sin diagnóstico.",
+    crit:"Backoff de 1, 2 y 4 segundos entre reintentos, máximo 3 intentos; si los 3 fallan, pasa al fallback."},
+  {id:190,phase:4,title:"Fallback sin LLM",status:"open",start:17,dur:1,deps:[188],
+    why:"Si el modelo no responde tras los reintentos, un informe sin diagnóstico inteligente sigue siendo mejor que silencio total.",
+    crit:"Con el LLM inaccesible, se genera un informe con la evidencia cruda etiquetada; el sistema no se cuelga."},
+
+  {id:191,phase:5,title:"Prompt estructurado",status:"open",start:9,dur:2,deps:[174],
+    why:"Transforma evidencia cruda en diagnóstico comprensible; es el diferenciador central del producto. Puede arrancar con evidencia simulada mientras Fase 2 sigue en marcha.",
+    crit:"Produce las 8 secciones definidas (4 de diagnóstico y 4 de guía) en lenguaje comprensible."},
+  {id:192,phase:5,title:"Iteración con escenarios",status:"open",start:16,dur:2,deps:[191,189],
+    why:"Un prompt que funciona para disco lleno puede fallar en cascada; solo se valida generalizando contra evidencia real, lo que exige el modo caché de Fase 4.",
+    crit:"Informes correctos para los 4 escenarios básicos y al menos 3 de los 5 realistas."},
+  {id:193,phase:5,title:"Validar comprensibilidad del lenguaje",status:"open",start:18,dur:1,deps:[192],
+    why:"Filtro interno rápido antes de la prueba formal con usuarios externos (#215): si el equipo no entiende un informe, un externo tampoco lo hará.",
+    crit:"Todo término técnico tiene explicación entre paréntesis; los pasos son seguibles sin experiencia previa."},
+  {id:194,phase:5,title:"Reducir alucinaciones",status:"open",start:18,dur:2,deps:[192],
+    why:"Exige niveles de confianza y causas descartadas para que el modelo no afirme con seguridad falsa.",
+    crit:"Todos los informes incluyen causas descartadas y un nivel de confianza (alta, media o baja) por hipótesis."},
+
+  {id:195,phase:6,title:"Escritura de informes",status:"open",start:18,dur:1,deps:[190],
+    why:"El informe en disco es el producto principal del Modo 1; sin persistencia, el diagnóstico se pierde en la respuesta HTTP.",
+    crit:"Cada incidente produce un archivo .md en /var/lib/doctorjk/informes/ con nombre descriptivo."},
+  {id:196,phase:6,title:"Unit systemd",status:"open",start:18,dur:1,deps:[190],
+    why:"Doctor J/K vive en el servidor: arranca solo, corre 24/7 y se recupera de sus propios crashes.",
+    crit:"systemctl start lo inicia; si se mata el proceso, systemd lo reinicia automáticamente."},
+  {id:197,phase:6,title:"Script de instalación",status:"open",start:19,dur:1,deps:[195,196],
+    why:"El buyer persona (Mateo) abandona cualquier herramienta que tarde más de 15 minutos en instalarse.",
+    crit:"install.sh deja el agente corriendo como servicio en menos de 15 minutos sobre un VPS limpio."},
+  {id:198,phase:6,title:"Rotación de informes",status:"open",start:19,dur:1,deps:[195],
+    why:"Sin rotación, meses de incidentes acumulados podrían causar el propio incidente de disco lleno que el agente debería detectar.",
+    crit:"Nunca hay más de 30 informes, o 30 días, acumulados en el directorio."},
+
+  {id:199,phase:7,title:"Scripts de corrección",status:"open",start:20,dur:2,deps:[197],
+    why:"Implementa el Modo 2: corrección determinista, predecible y auditable para los 4 tipos de incidente conocidos.",
+    crit:"Un disco lleno se resuelve automáticamente en menos de 2 minutos sin intervención humana."},
+  {id:200,phase:7,title:"Clasificador de tipo",status:"open",start:22,dur:1,deps:[199],
+    why:"Mapea el tipo de incidente al script correcto; ejecutar el script equivocado es peor que no ejecutar nada.",
+    crit:"Cada tipo de incidente se mapea a su script; un tipo sin script solo genera informe, sin ejecutar nada."},
+  {id:201,phase:7,title:"Logging de auditoría",status:"open",start:22,dur:1,deps:[199],
+    why:"El administrador necesita saber exactamente qué comando corrió el agente y qué resultó.",
+    crit:"journalctl muestra el comando ejecutado, el código de salida y el resultado de cada corrección."},
+  {id:202,phase:7,title:"Verificación post-corrección",status:"open",start:23,dur:2,deps:[200,201],
+    why:"Un script que corre sin error no garantiza que el problema se resolvió; hay que confirmarlo con un chequeo aparte.",
+    crit:"Si la verificación falla, se marca 'corrección fallida' y se escala, nunca se asume éxito."},
+
+  {id:203,phase:8,title:"Scripts de provocación",status:"open",start:25,dur:2,deps:[202,194,185],
+    why:"Sin provocación estandarizada, cada prueba es manual y no comparable entre las 42 corridas de Fase 8.",
+    crit:"9 escenarios más 5 casos negativos reproducen su condición de forma confiable."},
+  {id:204,phase:8,title:"Respuestas esperadas",status:"open",start:25,dur:1,deps:[202,194,185],
+    why:"Define la causa raíz y la solución correctas antes de correr la prueba, para evaluar en forma objetiva y no a ojo.",
+    crit:"Los 9 escenarios y los 5 negativos tienen síntoma, causa raíz y solución documentados antes de la primera corrida."},
+  {id:205,phase:8,title:"3 corridas por escenario",status:"open",start:27,dur:3,deps:[203,204],
+    why:"Un agente que acierta 1 de cada 3 veces no es confiable; mide consistencia, no solo un acierto aislado.",
+    crit:"42 corridas completas, cada una evaluada contra su respuesta esperada."},
+  {id:206,phase:8,title:"Tabulación de resultados",status:"open",start:30,dur:1,deps:[205],
+    why:"Sin tabular, 42 informes sueltos no dicen nada; la matriz muestra de un vistazo dónde falla el agente.",
+    crit:"Matriz de escenario por 7 métricas, con porcentaje de éxito y promedios dentro de meta."},
+
+  {id:207,phase:9,title:"Generador de plan de corrección",status:"open",start:31,dur:1,deps:[206],
+    why:"El cerebro del Modo 3: cada paso lleva comando exacto, resultado esperado y condiciones para continuar o abortar.",
+    crit:"El modelo genera planes estructurados para al menos los 4 escenarios básicos."},
+  {id:208,phase:9,title:"[SALVAGUARDA] Lista blanca de comandos",status:"open",start:31,dur:1,deps:[206],safeguard:true,
+    why:"Previene el peor escenario: un modelo que alucina un comando destructivo y el agente lo ejecuta. Innegociable, nunca se recorta.",
+    crit:"Un 'rm -rf /' generado por el modelo es rechazado y registrado; solo corren patrones de la lista blanca."},
+  {id:209,phase:9,title:"[SALVAGUARDA] Modo dry-run",status:"open",start:31,dur:1,deps:[206],safeguard:true,
+    why:"Permite validar la lógica del Modo 3 sin tocar el servidor, obligatorio en desarrollo y en la demo. Innegociable.",
+    crit:"Con --dry-run el agente muestra qué haría, pero no ejecuta ningún comando."},
+  {id:210,phase:9,title:"[SALVAGUARDA] Flag explícito auto-fix",status:"open",start:31,dur:1,deps:[206],safeguard:true,
+    why:"Por defecto Doctor J/K solo diagnostica; el cliente activa la corrección automática recién cuando ya confía. Innegociable.",
+    crit:"Una instalación nueva solo genera informes hasta que se pasa --auto-fix."},
+  {id:211,phase:9,title:"Ejecutor paso a paso con validación",status:"open",start:32,dur:2,deps:[207,208,209,210],
+    why:"A diferencia de los scripts fijos del Modo 2, el plan generado por IA se valida paso a paso para no seguir de largo tras un fallo.",
+    crit:"Si el paso 2 de un plan falla, los pasos 3 y 4 no se ejecutan."},
+  {id:212,phase:9,title:"[SALVAGUARDA] Aborto automático y escalamiento",status:"open",start:34,dur:1,deps:[211],safeguard:true,
+    why:"Detiene el daño en el primer error en vez de dejar que el Modo 3 empeore el problema paso tras paso. Innegociable.",
+    crit:"Un plan que falla en el paso 2 se detiene, documenta y se marca para escalar; no hay ejecución parcial silenciosa."},
+  {id:213,phase:9,title:"[SALVAGUARDA] Logging de auditoría del Modo 3",status:"open",start:34,dur:1,deps:[211],safeguard:true,
+    why:"Cada comando, resultado y decisión del modelo queda trazado; es lo que separa al producto de un 'auto-healing ciego'. Innegociable.",
+    crit:"El informe final y journald permiten reconstruir exactamente qué pasó, comando por comando."},
+  {id:214,phase:9,title:"Medición de corrección automática",status:"open",start:35,dur:1,deps:[212,213],
+    why:"Métrica obligatoria, ya no condicional, que valida si el diferenciador comercial del producto funciona en la práctica.",
+    crit:"Tasa de corrección automática superior al 85% sobre los escenarios de prueba."},
+  {id:215,phase:9,title:"Prueba de comprensibilidad con usuarios",status:"open",start:31,dur:2,deps:[206],
+    why:"La validación definitiva de la promesa central del producto: que alguien sin experiencia en sysadmin entienda el informe. Solo necesita informes ya generados en Fase 8, por eso corre en paralelo al resto de Fase 9.",
+    crit:"Al menos 4 de cada 5 personas no técnicas entienden qué pasó y podrían seguir los pasos (más del 80%)."},
+
+  {id:216,phase:10,title:"Documentación de arquitectura",status:"open",start:31,dur:5,deps:[206],
+    why:"Sin ella, cualquier persona nueva —o el propio equipo en 6 meses— tendría que leer todo el código para entender el sistema. No necesita esperar a que termine Fase 9.",
+    crit:"Un desarrollador entiende componentes, flujo de datos y decisiones de diseño sin ver el código."},
+  {id:217,phase:10,title:"README completo",status:"open",start:36,dur:2,deps:[214],
+    why:"Para un producto de código cerrado, el README es la única interfaz entre el producto y quien lo instala.",
+    crit:"Alguien externo instala en menos de 15 minutos y entiende los 3 modos leyendo solo el README."},
+  {id:218,phase:10,title:"Empaquetado para distribución",status:"open",start:38,dur:1,deps:[217],
+    why:"Doctor J/K es código cerrado; distribuir archivos .py sueltos permitiría verlo y redistribuirlo libremente.",
+    crit:"El paquete o imagen Docker se instala sin clonar el repositorio; el código fuente no queda legible."},
+  {id:219,phase:10,title:"Preparación de demo",status:"open",start:36,dur:2,deps:[214,215],
+    why:"Ya no hay modo offline porque se eliminó Ollama: los informes pregenerados son el único respaldo si falla la red en vivo.",
+    crit:"La demo completa corre en menos de 10 minutos; si se cae la red, los informes pregenerados sostienen la presentación."},
+  {id:220,phase:10,title:"Presentación",status:"open",start:39,dur:1,deps:[216,218,219],
+    why:"Es la evaluación final del proyecto: debe mostrar un producto viable, un cliente definido y métricas, no solo que el agente funciona.",
+    crit:"Presentación con las 7 secciones definidas, máximo 20 slides, ensayada al menos una vez."},
+  {id:221,phase:10,title:"[OPT] Backend + panel web",status:"open",start:31,dur:5,deps:[206],optional:true,
+    why:"Primer paso hacia la vista centralizada multi-servidor que necesita el segmento de expansión (empresas con 20 a 200 servidores). También es el primero en recortarse si hay atraso.",
+    crit:"Un agente envía un informe al Worker; aparece en el panel con hostname, timestamp y diagnóstico persistente."}
+  ];
+
+  var byId = {};
+  ISSUES.forEach(function(i){ byId[i.id] = i; });
+
+  var START_DATE = new Date(2026, 7, 17); // 17 ago 2026 (mes 0-index)
+  var DAY_W = 24;
+  var LABEL_W = 230;
+  var TOTAL_DAYS = 0;
+  ISSUES.forEach(function(i){ TOTAL_DAYS = Math.max(TOTAL_DAYS, i.start + i.dur); });
+
+  function addBusinessDays(base, n){
+    var d = new Date(base.getTime());
+    var added = 0;
+    while(added < n){
+      d.setDate(d.getDate()+1);
+      var wd = d.getDay();
+      if(wd !== 0 && wd !== 6) added++;
+    }
+    return d;
+  }
+  function fmtDate(d){
+    var months = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
+    return d.getDate() + " " + months[d.getMonth()];
+  }
+
+  function isReady(issue){
+    if(issue.status === "closed") return false;
+    return issue.deps.every(function(d){ return byId[d].status === "closed"; });
+  }
+
+  /* ================= STATS ================= */
+
+  function renderStats(){
+    var total = ISSUES.length;
+    var closed = ISSUES.filter(function(i){return i.status==="closed";}).length;
+    var crit = ISSUES.filter(function(i){return i.critical;}).length;
+    var safe = ISSUES.filter(function(i){return i.safeguard;}).length;
+    var ready = ISSUES.filter(isReady).length;
+
+    var statsEl = document.getElementById("stats");
+    statsEl.innerHTML =
+      statCard(total, "issues") +
+      statCard(closed, "cerrados", "done") +
+      statCard(crit, "ruta crítica", "crit") +
+      statCard(safe, "salvaguardas", "safe") +
+      statCard(ready, "listos hoy", "ready");
+
+    var pct = Math.round(closed/total*100);
+    document.getElementById("progressFill").style.width = pct + "%";
+    document.getElementById("progressLabel").textContent =
+      closed + " de " + total + " issues cerrados (" + pct + "%) · Fase 0 casi lista, Fase 1 en arranque";
+  }
+  function statCard(num, lbl, cls){
+    return '<div class="stat'+(cls?(' '+cls):'')+'"><span class="num">'+num+'</span><span class="lbl">'+lbl+'</span></div>';
+  }
+
+  function renderReadyCallout(){
+    var ready = ISSUES.filter(isReady).sort(function(a,b){return a.id-b.id;});
+    var wrap = document.getElementById("readyChips");
+    wrap.innerHTML = ready.map(function(i){
+      return '<button class="cchip" data-jump="'+i.id+'">#'+i.id+' · '+i.title+'</button>';
+    }).join("");
+  }
+
+  /* ================= DEPENDENCY DIAGRAM ================= */
+
+  function renderDiagram(){
+    var svg = document.getElementById("depSvg");
+    var css = getComputedStyle(document.documentElement);
+    var col = {
+      ink: css.getPropertyValue('--ink').trim(),
+      muted: css.getPropertyValue('--ink-muted').trim(),
+      surface: css.getPropertyValue('--surface').trim(),
+      surface2: css.getPropertyValue('--surface-2').trim(),
+      border: css.getPropertyValue('--border-strong').trim(),
+      crit: css.getPropertyValue('--crit-fg').trim(),
+      critBg: css.getPropertyValue('--crit-bg').trim(),
+      critBd: css.getPropertyValue('--crit-bd').trim(),
+      ready: css.getPropertyValue('--ready').trim(),
+      safeBg: css.getPropertyValue('--safe-bg').trim(),
+      safeFg: css.getPropertyValue('--safe-fg').trim(),
+      safeBd: css.getPropertyValue('--safe-bd').trim()
+    };
+
+    var nodes = {
+      F0:{x:20,  y:120, w:110, h:56, label:"Fase 0", sub:"Preparación"},
+      F1:{x:170, y:120, w:110, h:56, label:"Fase 1", sub:"Monitor+Trigger"},
+      F2:{x:320, y:105, w:130, h:86, label:"Fase 2", sub:"Detector — CRÍTICA", crit:true},
+      F3:{x:510, y:60,  w:130, h:56, label:"Fase 3", sub:"Recolector+Sanit."},
+      F4:{x:510, y:154, w:130, h:56, label:"Fase 4", sub:"Cliente LLM"},
+      F5:{x:510, y:12,  w:130, h:40, label:"Fase 5", sub:"Prompt — paralela", ready:true},
+      F6:{x:700, y:154, w:110, h:56, label:"Fase 6", sub:"Systemd"},
+      F7:{x:850, y:154, w:110, h:56, label:"Fase 7", sub:"Modo 2"},
+      F8:{x:1000,y:120, w:110, h:56, label:"Fase 8", sub:"Pruebas"},
+      F9:{x:1150,y:105, w:130, h:56, label:"Fase 9", sub:"Modo 3 — oblig.", safe:true},
+      F10:{x:510, y:246,w:130, h:44, label:"Fase 10", sub:"Entrega"}
+    };
+
+    function nodeCenter(id, side){
+      var n = nodes[id];
+      if(side==="right") return {x:n.x+n.w, y:n.y+n.h/2};
+      if(side==="left") return {x:n.x, y:n.y+n.h/2};
+      if(side==="top") return {x:n.x+n.w/2, y:n.y};
+      if(side==="bottom") return {x:n.x+n.w/2, y:n.y+n.h};
+      return {x:n.x+n.w/2, y:n.y+n.h/2};
+    }
+
+    function edgePath(x1,y1,x2,y2){
+      var midx = (x1+x2)/2;
+      return "M "+x1+" "+y1+" C "+midx+" "+y1+", "+midx+" "+y2+", "+x2+" "+y2;
+    }
+
+    var edges = [
+      {a:["F0","right"], b:["F1","left"], crit:true},
+      {a:["F1","right"], b:["F2","left"], crit:true},
+      {a:["F2","right"], b:["F3","left"]},
+      {a:["F2","right"], b:["F4","left"]},
+      {a:["F2","top"],   b:["F5","left"], dashed:true},
+      {a:["F4","top"],   b:["F5","bottom"], dashed:true},
+      {a:["F4","right"], b:["F6","left"]},
+      {a:["F6","right"], b:["F7","left"]},
+      {a:["F3","right"], b:["F8","left"]},
+      {a:["F7","right"], b:["F8","left"]},
+      {a:["F5","right"], b:["F8","top"]},
+      {a:["F8","right"], b:["F9","left"], crit:true},
+      {a:["F2","bottom"],b:["F10","left"], dashed:true, faint:true},
+      {a:["F9","bottom"], b:["F10","right"], dashed:true, faint:true}
+    ];
+
+    var svgns = "http://www.w3.org/2000/svg";
+    while(svg.firstChild) svg.removeChild(svg.firstChild);
+
+    var defs = document.createElementNS(svgns,"defs");
+    ["arrow","arrowcrit"].forEach(function(id){
+      var marker = document.createElementNS(svgns,"marker");
+      marker.setAttribute("id", id);
+      marker.setAttribute("viewBox","0 0 10 10");
+      marker.setAttribute("refX","8"); marker.setAttribute("refY","5");
+      marker.setAttribute("markerWidth","7"); marker.setAttribute("markerHeight","7");
+      marker.setAttribute("orient","auto-start-reverse");
+      var p = document.createElementNS(svgns,"path");
+      p.setAttribute("d","M 0 0 L 10 5 L 0 10 z");
+      p.setAttribute("fill", id==="arrowcrit" ? col.crit : col.border);
+      marker.appendChild(p);
+      defs.appendChild(marker);
+    });
+    svg.appendChild(defs);
+
+    edges.forEach(function(e){
+      var p1 = nodeCenter(e.a[0], e.a[1]);
+      var p2 = nodeCenter(e.b[0], e.b[1]);
+      var path = document.createElementNS(svgns,"path");
+      path.setAttribute("d", edgePath(p1.x,p1.y,p2.x,p2.y));
+      path.setAttribute("class","dedge"+(e.dashed?" dashed":"")+(e.crit?" critpath":""));
+      if(e.faint){ path.setAttribute("opacity","0.5"); }
+      path.setAttribute("marker-end","url(#"+(e.crit?"arrowcrit":"arrow")+")");
+      svg.appendChild(path);
+    });
+
+    Object.keys(nodes).forEach(function(key){
+      var n = nodes[key];
+      var g = document.createElementNS(svgns,"g");
+      g.setAttribute("class","dnode");
+      var rect = document.createElementNS(svgns,"rect");
+      rect.setAttribute("x", n.x); rect.setAttribute("y", n.y);
+      rect.setAttribute("width", n.w); rect.setAttribute("height", n.h);
+      rect.setAttribute("rx", 9);
+      if(n.crit){ rect.setAttribute("fill", col.critBg); rect.setAttribute("stroke", col.critBd); }
+      else if(n.safe){ rect.setAttribute("fill", col.safeBg); rect.setAttribute("stroke", col.safeBd); }
+      else if(n.ready){ rect.setAttribute("fill", col.surface); rect.setAttribute("stroke", col.ready); }
+      else { rect.setAttribute("fill", col.surface); rect.setAttribute("stroke", col.border); }
+      g.appendChild(rect);
+
+      var t1 = document.createElementNS(svgns,"text");
+      t1.setAttribute("x", n.x+12); t1.setAttribute("y", n.y+22);
+      t1.setAttribute("class","dnum");
+      t1.setAttribute("font-size","12.5");
+      t1.setAttribute("fill", n.crit?col.crit:(n.safe?col.safeFg:col.ink));
+      t1.textContent = n.label;
+      g.appendChild(t1);
+
+      var t2 = document.createElementNS(svgns,"text");
+      t2.setAttribute("x", n.x+12); t2.setAttribute("y", n.y+ (n.h>50?40:34));
+      t2.setAttribute("font-size","10.5");
+      t2.setAttribute("fill", col.muted);
+      t2.textContent = n.sub;
+      g.appendChild(t2);
+
+      svg.appendChild(g);
+    });
+  }
+
+  /* ================= GANTT ================= */
+
+  var currentFilter = "all";
+  var currentSearch = "";
+
+  function assignLanes(list){
+    list = list.slice().sort(function(a,b){ return a.start - b.start; });
+    var laneEnd = [];
+    list.forEach(function(issue){
+      var placed = false;
+      for(var i=0;i<laneEnd.length;i++){
+        if(laneEnd[i] <= issue.start){ issue._lane = i; laneEnd[i] = issue.start+issue.dur; placed = true; break; }
+      }
+      if(!placed){ issue._lane = laneEnd.length; laneEnd.push(issue.start+issue.dur); }
+    });
+    return laneEnd.length;
+  }
+
+  function statusClass(issue){
+    if(issue.status === "closed") return "st-done";
+    if(issue.critical) return "st-critical";
+    if(issue.safeguard) return "st-safeguard";
+    if(issue.optional) return "st-optional";
+    return "";
+  }
+
+  function matchesFilter(issue){
+    if(currentSearch){
+      var q = currentSearch.toLowerCase();
+      var hay = ("#"+issue.id+" "+issue.title).toLowerCase();
+      if(hay.indexOf(q) === -1) return false;
+    }
+    switch(currentFilter){
+      case "open": return issue.status === "open";
+      case "closed": return issue.status === "closed";
+      case "critical": return !!issue.critical;
+      case "safeguard": return !!issue.safeguard;
+      case "ready": return isReady(issue);
+      default: return true;
+    }
+  }
+
+  function renderGantt(){
+    var gantt = document.getElementById("gantt");
+    gantt.innerHTML = "";
+
+    // ruler
+    var ruler = document.createElement("div");
+    ruler.className = "ruler";
+    var rLabel = document.createElement("div");
+    rLabel.className = "ruler-label";
+    ruler.appendChild(rLabel);
+    var rTrack = document.createElement("div");
+    rTrack.className = "ruler-track";
+    rTrack.style.width = (TOTAL_DAYS*DAY_W)+"px";
+
+    var weekRow = document.createElement("div");
+    weekRow.className = "week-row";
+    for(var w=0; w*5 < TOTAL_DAYS; w++){
+      var wc = document.createElement("div");
+      wc.className = "week-cell";
+      wc.style.width = (Math.min(5, TOTAL_DAYS-w*5)*DAY_W)+"px";
+      wc.textContent = "Semana " + (w+1);
+      weekRow.appendChild(wc);
+    }
+    rTrack.appendChild(weekRow);
+
+    var dayRow = document.createElement("div");
+    dayRow.className = "day-row";
+    for(var d=0; d<TOTAL_DAYS; d++){
+      var dc = document.createElement("div");
+      dc.className = "day-cell";
+      dc.textContent = fmtDate(addBusinessDays(START_DATE, d));
+      dayRow.appendChild(dc);
+    }
+    rTrack.appendChild(dayRow);
+
+    var todayFlag = document.createElement("div");
+    todayFlag.className = "today-flag";
+    rTrack.appendChild(todayFlag);
+
+    ruler.appendChild(rTrack);
+    gantt.appendChild(ruler);
+
+    PHASES.forEach(function(phase){
+      var issues = ISSUES.filter(function(i){ return i.phase === phase.n; });
+      var lanes = assignLanes(issues);
+
+      var block = document.createElement("div");
+      block.className = "phase-block";
+
+      var divider = document.createElement("div");
+      divider.className = "phase-divider" + (phase.tag==="critical"?" is-critical":phase.tag==="obligatoria"?" is-obligatoria":phase.tag==="parallel"?" is-parallel":"");
+      var closedCount = issues.filter(function(i){return i.status==="closed";}).length;
+      divider.innerHTML =
+        '<div class="plabel"><span class="ptitle">Fase '+phase.n+' — '+phase.name+'</span>'+
+        '<span class="pmeta">'+phase.week+' · '+phase.dur+'</span></div>'+
+        '<div class="pflex"></div>'+
+        '<span class="pbadge">'+closedCount+'/'+issues.length+' cerrados</span>'+
+        (phase.tag ? '<span class="pbadge">'+(phase.tag==="critical"?"ruta crítica":phase.tag==="obligatoria"?"obligatoria":"paralelizable")+'</span>' : '');
+      block.appendChild(divider);
+
+      for(var lane=0; lane<lanes; lane++){
+        var laneRow = document.createElement("div");
+        laneRow.className = "lane-row";
+        var laneLabel = document.createElement("div");
+        laneLabel.className = "lane-label";
+        laneRow.appendChild(laneLabel);
+        var laneTrack = document.createElement("div");
+        laneTrack.className = "lane-track";
+        laneTrack.style.width = (TOTAL_DAYS*DAY_W)+"px";
+
+        issues.filter(function(i){return i._lane===lane;}).forEach(function(issue){
+          var bar = document.createElement("div");
+          bar.className = "bar " + statusClass(issue);
+          bar.style.left = (issue.start*DAY_W)+"px";
+          bar.style.width = Math.max(issue.dur*DAY_W-4, 30)+"px";
+          bar.dataset.id = issue.id;
+          bar.tabIndex = 0;
+          bar.setAttribute("role","button");
+          bar.setAttribute("aria-label","Issue "+issue.id+": "+issue.title);
+          if(!matchesFilter(issue)) bar.classList.add("dim");
+          var readyDot = isReady(issue) ? '<span class="readydot" title="Listo para empezar hoy"></span>' : '';
+          bar.innerHTML = readyDot + '<span class="bnum">#'+issue.id+'</span><span class="btitle">'+issue.title+'</span>';
+          bar.addEventListener("click", function(ev){ openDrawer(parseInt(ev.currentTarget.dataset.id,10)); });
+          bar.addEventListener("keydown", function(ev){ if(ev.key==="Enter"||ev.key===" "){ ev.preventDefault(); openDrawer(parseInt(ev.currentTarget.dataset.id,10)); } });
+          laneTrack.appendChild(bar);
+        });
+
+        laneRow.appendChild(laneTrack);
+        block.appendChild(laneRow);
+      }
+
+      gantt.appendChild(block);
+    });
+  }
+
+  function applyFilters(){
+    document.querySelectorAll(".bar").forEach(function(bar){
+      var issue = byId[parseInt(bar.dataset.id,10)];
+      bar.classList.toggle("dim", !matchesFilter(issue));
+    });
+  }
+
+  /* ================= PHASE ACCORDION ================= */
+
+  function renderPhaseAccordion(){
+    var wrap = document.getElementById("phases");
+    wrap.innerHTML = "";
+    PHASES.forEach(function(phase){
+      var issues = ISSUES.filter(function(i){ return i.phase === phase.n; });
+      var closedCount = issues.filter(function(i){return i.status==="closed";}).length;
+
+      var det = document.createElement("details");
+      det.className = "phase-acc";
+      if(phase.n <= 1) det.open = true;
+
+      var summary = document.createElement("summary");
+      summary.innerHTML =
+        '<span class="sn">Fase '+phase.n+'</span> '+phase.name+
+        '<span class="stag">'+phase.week+' · '+closedCount+'/'+issues.length+' cerrados'+(phase.tag?(' · '+(phase.tag==="critical"?"RUTA CRÍTICA":phase.tag==="obligatoria"?"OBLIGATORIA":"PARALELIZABLE")):'')+'</span>';
+      det.appendChild(summary);
+
+      var body = document.createElement("div");
+      body.className = "acc-body";
+      var meta = document.createElement("div");
+      meta.className = "acc-meta";
+      meta.textContent = "Duración: " + phase.dur + " · Depende de: " + phase.deps;
+      body.appendChild(meta);
+
+      issues.forEach(function(issue){
+        var row = document.createElement("div");
+        row.className = "issue-row";
+        var tags = "";
+        if(issue.critical) tags += '<span class="tag crit">ruta crítica</span>';
+        if(issue.safeguard) tags += '<span class="tag safe">salvaguarda</span>';
+        if(issue.optional) tags += '<span class="tag opt">opcional</span>';
+        var deps = issue.deps.map(function(d){ return '<span class="depchip" data-jump="'+d+'">#'+d+'</span>'; }).join("");
+        row.innerHTML =
+          '<span class="iid">#'+issue.id+'</span>'+
+          '<span class="ititle">'+issue.title+'</span>'+
+          '<span class="pill '+(issue.status==="closed"?"st-done":"st-open")+'">'+(issue.status==="closed"?"cerrado":"abierto")+'</span>'+
+          '<div class="issue-body">'+
+            '<p class="why"><b>Por qué importa: </b>'+issue.why+'</p>'+
+            '<p><b>Criterio de avance: </b>'+issue.crit+'</p>'+
+            (tags ? '<div class="tagrow">'+tags+'</div>' : '')+
+            (deps ? '<div class="depchips"><span style="font-family:var(--font-mono);font-size:11px;color:var(--ink-faint);">depende de:</span>'+deps+'</div>' : '')+
+          '</div>';
+        body.appendChild(row);
+      });
+
+      det.appendChild(body);
+      wrap.appendChild(det);
+    });
+  }
+
+  /* ================= DRAWER ================= */
+
+  function openDrawer(id){
+    var issue = byId[id];
+    if(!issue) return;
+    var startDate = addBusinessDays(START_DATE, issue.start);
+    var endDate = addBusinessDays(START_DATE, issue.start+issue.dur-1);
+
+    var tags = "";
+    if(issue.critical) tags += '<span class="tag crit">ruta crítica</span>';
+    if(issue.safeguard) tags += '<span class="tag safe">salvaguarda — nunca se recorta</span>';
+    if(issue.optional) tags += '<span class="tag opt">opcional — primero en recortarse</span>';
+    tags += issue.status==="closed" ? '<span class="pill st-done">cerrado</span>' : '<span class="pill st-open">abierto</span>';
+    if(isReady(issue)) tags += '<span class="pill st-open" style="color:var(--ready);border-color:var(--ready);">listo para empezar</span>';
+
+    var deps = issue.deps.length
+      ? issue.deps.map(function(d){ var t=byId[d]; return '<span class="depchip" data-jump="'+d+'">#'+d+' · '+(t.status==="closed"?"cerrado":"abierto")+'</span>'; }).join("")
+      : '<span style="color:var(--ink-faint);font-size:13px;">ninguna — puede empezar apenas su fase esté habilitada</span>';
+
+    var parallel = ISSUES.filter(function(o){
+      return o.id!==issue.id && o.start < issue.start+issue.dur && issue.start < o.start+o.dur;
+    }).sort(function(a,b){return a.id-b.id;});
+    var parallelHtml = parallel.length
+      ? parallel.slice(0,10).map(function(o){ return '<span class="depchip" data-jump="'+o.id+'">#'+o.id+'</span>'; }).join("") + (parallel.length>10 ? ' <span style="font-size:11px;color:var(--ink-faint);">+'+(parallel.length-10)+' más</span>' : '')
+      : '<span style="color:var(--ink-faint);font-size:13px;">ninguna en este momento del cronograma</span>';
+
+    var phaseInfo = PHASES[issue.phase];
+
+    document.getElementById("drawerContent").innerHTML =
+      '<div class="dw-id">Issue #'+issue.id+' · Fase '+issue.phase+' — '+phaseInfo.name+'</div>'+
+      '<div class="dw-title">'+issue.title+'</div>'+
+      '<div class="dw-tags">'+tags+'</div>'+
+      '<div class="dw-section"><h4>Fechas proyectadas</h4><p class="dw-dates">'+fmtDate(startDate)+' → '+fmtDate(endDate)+' ('+issue.dur+' día'+(issue.dur>1?'s':'')+' hábil'+(issue.dur>1?'es':'')+')</p></div>'+
+      '<div class="dw-section"><h4>Por qué importa</h4><p>'+issue.why+'</p></div>'+
+      '<div class="dw-section"><h4>Criterio de avance</h4><p>'+issue.crit+'</p></div>'+
+      '<div class="dw-section"><h4>Depende de</h4><div class="depchips">'+deps+'</div></div>'+
+      '<div class="dw-section"><h4>Se solapa en el tiempo con</h4><div class="depchips">'+parallelHtml+'</div></div>';
+
+    document.getElementById("drawer").classList.add("show");
+    document.getElementById("scrim").classList.add("show");
+    document.getElementById("drawer").setAttribute("aria-hidden","false");
+  }
+  function closeDrawer(){
+    document.getElementById("drawer").classList.remove("show");
+    document.getElementById("scrim").classList.remove("show");
+    document.getElementById("drawer").setAttribute("aria-hidden","true");
+  }
+
+  function jumpTo(id){
+    var bar = document.querySelector('.bar[data-id="'+id+'"]');
+    if(bar){
+      bar.scrollIntoView({behavior:"smooth", block:"center", inline:"center"});
+      bar.classList.add("flash");
+      setTimeout(function(){ bar.classList.remove("flash"); }, 1100);
+    }
+    openDrawer(id);
+  }
+
+  /* ================= EVENTS ================= */
+
+  document.getElementById("drawerClose").addEventListener("click", closeDrawer);
+  document.getElementById("scrim").addEventListener("click", closeDrawer);
+  document.addEventListener("keydown", function(ev){ if(ev.key==="Escape") closeDrawer(); });
+
+  document.getElementById("filters").addEventListener("click", function(ev){
+    var btn = ev.target.closest(".chip");
+    if(!btn) return;
+    document.querySelectorAll("#filters .chip").forEach(function(c){ c.classList.remove("active"); });
+    btn.classList.add("active");
+    currentFilter = btn.dataset.filter;
+    applyFilters();
+  });
+
+  document.getElementById("search").addEventListener("input", function(ev){
+    currentSearch = ev.target.value.trim();
+    applyFilters();
+  });
+
+  document.addEventListener("click", function(ev){
+    var jumpEl = ev.target.closest("[data-jump]");
+    if(jumpEl){ jumpTo(parseInt(jumpEl.dataset.jump,10)); }
+  });
+
+  /* ================= INIT ================= */
+
+  renderStats();
+  renderReadyCallout();
+  renderDiagram();
+  renderGantt();
+  renderPhaseAccordion();
+
+})();
+</script>
+</body>
+</html>
