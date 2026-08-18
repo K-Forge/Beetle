@@ -12,16 +12,19 @@ instalador/
 ├── desinstalar.sh        # revierte todo lo que install.sh dejó
 ├── doctorjk.service      # unidad systemd del agente
 ├── doctorjk.timer        # (opcional) si el monitor corre por timer en vez de bucle
-├── config.toml.example   # plantilla de configuración — se copia a /etc/doctorjk/
-└── env.example           # plantilla de secretos — se copia a /etc/doctorjk/.env
+└── config.toml.example   # plantilla de configuración — se copia a /etc/doctorjk/
 ```
+
+La plantilla de secretos (`.env.example`) vive en la raíz del repo, no acá — es la convención
+estándar para que quien clona el repo la vea de entrada.
 
 ## Qué debe hacer `install.sh`
 
 1. Verificar el sistema: Ubuntu/Debian, Python 3.11+, systemd presente.
 2. Crear el usuario de servicio `doctorjk` sin shell de login.
 3. Instalar el paquete en `/opt/doctorjk` con su entorno virtual.
-4. Copiar `config.toml.example` y `env.example` a `/etc/doctorjk/` si aún no existen —
+4. Copiar `config.toml.example` (de `instalador/`) y `.env.example` (de la raíz del repo) a
+   `/etc/doctorjk/` si aún no existen —
    nunca sobrescribir la config de una instalación previa.
 5. Pedir (o leer de un flag) las credenciales del proveedor de LLM y escribirlas en
    `/etc/doctorjk/.env` con permisos `600`.
