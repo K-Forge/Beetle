@@ -9,7 +9,7 @@ Copilot, Gemini CLI o cualquier otro.
 > `ln -s CONTEXTO-IA.md AGENTS.md` y `ln -s CONTEXTO-IA.md CLAUDE.md`.
 > Un solo archivo fuente, varios puntos de entrada.
 
-**Versión:** 1.1 | **Alineado con:** documento de proyecto v4.0, roadmap v4.0 y
+**Versión:** 1.2 | **Alineado con:** documento de proyecto v4.0, roadmap v4.0 y
 tareas v4.0 (issues #166–#221)
 
 ---
