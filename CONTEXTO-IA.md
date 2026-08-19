@@ -118,6 +118,9 @@ Beetle/
 ├── README.md
 ├── CONTEXTO-IA.md
 ├── .gitignore
+├── .github/
+│   ├── workflows/       # restaurar-snapshot.yml — el botón de restore del VPS
+│   └── scripts/         # restaurar-snapshot.sh, crear-snapshot.sh, abrir-ssh.sh
 ├── doctorjk/            # código del agente
 ├── prompts/             # prompts del LLM en .md
 ├── scripts-fix/         # correcciones bash deterministas (Modo 2)
@@ -125,7 +128,7 @@ Beetle/
 ├── demo/                # escenarios de provocación
 │   └── negativos/       # casos ruidosos que NO deben disparar el agente
 ├── pruebas/             # unitarias/, esperados/, resultados/, comprensibilidad/
-└── docs/                # proyecto, roadmap, tareas y links
+└── docs/                # proyecto, roadmap, tareas, links y runbooks
 ```
 
 Cada carpeta tiene su propio `README.md` con qué va dentro y sus convenciones;
@@ -163,6 +166,149 @@ aún sin escribir.
 - **Presupuesto:** techo de $80 en 6 meses para el modelo (sección 21 del documento
   de proyecto); el costo proyectado real es $0 con Cloudflare y $1.16 con DeepSeek.
   Nada que implique GPU, servidor dedicado o descarga de modelos.
+
+### 4.1 Infraestructura: cuotas reales y restauración del VPS
+
+Estos son los números reales de la tenancy de Oracle, verificados con `oci limits`.
+**No son estimaciones.** Un agente que proponga algo que no quepa aquí está
+proponiendo algo imposible:
+
+| Recurso | Cuota | En uso | Libre |
+|---|---|---|---|
+| OCPUs ARM (A1) | 2 | 2 (`beetle-vps`) | **0** |
+| Almacenamiento gratis | 200 GB | 150 GB (boot volume) | 50 GB sin usar |
+| Backups gratis | 5 | 2 | 3 |
+
+Consecuencias que hay que respetar:
+
+- **No se puede levantar una segunda instancia.** No hay OCPUs libres, y
+  `VM.Standard.E2.1.Micro` no existe en `sa-bogota-1`. No propongas "una VM
+  auxiliar" para nada — no cabe.
+- **No caben dos boot volumes a la vez** (150 + 150 = 300 GB contra 200 GB).
+- El boot volume se creó de **150 GB de los 200 GB disponibles**; quedan 50 GB
+  sin usar. Si en el futuro hiciera falta más disco, se puede **recrear el volume
+  a 200 GB** — no se puede expandir en caliente sin reconstruir. Hoy no hace
+  falta: solo hay 4,4 GB usados de 145 GB.
+- Una instancia **apagada sigue consumiendo su cuota de OCPUs**. Detenerla no
+  libera nada; hay que terminarla.
+- **Un boot volume creado desde un backup NO se puede adjuntar a una instancia
+  existente.** La API responde *"It can only be attached to its parent
+  instance"*. Solo sirve para lanzar una instancia nueva. Esto ya se intentó y
+  falló con el disco viejo ya borrado — **no lo reintentes**.
+- Por lo anterior, restaurar un snapshot es **terminar la instancia y lanzar
+  otra**: verificar el backup, terminar con `--preserve-boot-volume false`,
+  crear el boot volume desde el backup, lanzar, y reasignar la IP reservada.
+  Medido dos veces: entre 2 y 13 minutos, según lo que tarde el boot volume.
+- Tras un restore **cambian el OCID de la instancia, la IP privada y el host key
+  de SSH**. La IP pública `157.137.210.21` (`BEETLE-IP`) es reservada y **no**
+  cambia. Todo el equipo debe correr `ssh-keygen -R` después de una restauración.
+
+**Quién restaura y cómo.** Cualquiera del equipo puede restaurar el VPS sin tener
+credenciales de Oracle ni el OCI CLI instalado: en GitHub, **Actions → "Restaurar
+beetle-vps desde snapshot" → Run workflow**. Correrlo sin argumentos solo lista los
+snapshots y es seguro; para restaurar de verdad hay que dar el nombre exacto del
+backup **y** escribir `RESTAURAR` en el campo de confirmación. Cada ejecución queda
+en el historial de Actions: quién, cuándo y desde qué backup.
+
+El workflow no usa credenciales de administrador, sino el usuario de servicio
+`beetle-restore-bot`, del grupo IAM `beetle-restore`. Sus credenciales viven en
+los secrets del repo: `OCI_USER_OCID`, `OCI_TENANCY_OCID`, `OCI_FINGERPRINT` y
+`OCI_PRIVATE_KEY`. Su política concede `read` sobre `boot-volume-backups`,
+no `manage`: **quien restaura no puede destruir un punto de restauración**, ni tocar
+red o IAM, ni apagar otra instancia que no sea `beetle-vps`. Si necesitas ampliar
+esos permisos, párate y pregunta — la restricción es deliberada.
+
+Nota de OCI para quien edite políticas: `boot-volume-attachments` **no es un
+resource-type válido** y falla con un `No permissions found` que no dice cuál
+statement está mal. El attach/detach se concede con `use instance-family` más una
+condición sobre `request.permission`.
+
+**Tailscale después de un restore.** El snapshot incluye
+`/var/lib/tailscale/tailscaled.state`, así que el VPS vuelve con la identidad de
+tailnet que tenía el día del snapshot y puede aparecer duplicado o expirado. Por
+eso el nodo `beetle-vps` tiene la expiración de llave desactivada (verificado por CLI:
+`KeyExpiry` ausente en `tailscale status --json`).
+
+**Vías de entrada al VPS.** El security list de la subred permite:
+
+| Regla | Para qué |
+|---|---|
+| UDP/41641 desde `0.0.0.0/0` | Tailscale (WireGuard) — la vía principal |
+| ICMP | Path MTU discovery |
+| TCP/22 desde `0.0.0.0/0` | SSH de emergencia (break-glass), solo-llave + fail2ban |
+| TCP/80 desde `0.0.0.0/0` | Nginx accesible desde fuera — demos y pruebas externas de caída |
+
+Hasta el 2026-08-18 **no existía ninguna regla TCP** y Tailscale era la única
+puerta: si el nodo no volvía tras un restore, la única salida era la consola
+serial de Oracle. La regla TCP/22 existe justamente para no repetir eso.
+
+**El orden de acceso no es negociable: primero Tailscale, siempre.** El SSH
+público existe solo como break-glass para cuando el VPS o el tailnet se caen. No
+lo uses para trabajo diario ni lo pongas en scripts.
+
+Se abrió a `0.0.0.0/0` a propósito: anclarlo a IPs fijas era inviable porque el
+equipo cambia de red constantemente. Las dos defensas reales son que SSH es
+**solo-llave** y que **fail2ban** banea tras varios intentos fallidos — la IP
+nunca fue la seguridad, solo reducción de superficie. Si alguna vez se quiere
+volver a restringir por IP, `.github/scripts/abrir-ssh.sh <etiqueta>` lo hace.
+
+SSH está en modo solo-llave (`PasswordAuthentication no`) y se sirve por
+activación de socket (`ssh.socket`, no `ssh.service` — `systemctl is-active ssh`
+reporta `inactive` y eso es normal en Ubuntu 24.04).
+
+**El puerto 80 sí está expuesto** desde el 2026-08-19 (verificado: `HTTP 200`
+desde fuera). Era necesario para el criterio de avance de #169 y para la demo en
+vivo de #219.
+
+Ojo: abrir el security list de Oracle **no basta**. El VPS corre `ufw` y hay que
+abrirlo también ahí (`ufw allow 80/tcp`), que además persiste entre reinicios. Un
+puerto que no responde desde fuera casi siempre es esto, no Oracle.
+
+`fail2ban` está activo con el jail `sshd`.
+
+### Cómo se entra y qué hay dentro
+
+- **Acceso:** Tailscale SSH (autenticación por identidad de tailnet, no por llave
+  privada). El nodo es `beetle-vps` / `100.112.242.120`, con `tag:beetle`. Quién
+  puede entrar y como qué usuario lo decide la ACL del tailnet.
+- **Repo en el VPS:** `/home/beetle/Beetle`, usuario `beetle`, remoto HTTPS con
+  credencial ya configurada (un `git fetch` autentica sin intervención).
+- **`apt` usa el mirror público** `ports.ubuntu.com`, no el interno de Oracle
+  (`sa-bogota-1-ad-1.clouds.ports.ubuntu.com`), que tras una reconstrucción deja
+  de resolverse y rompe cualquier instalación. Respaldo en `ubuntu.sources.bak`.
+- **Ya instalado:** Nginx (`:80`), PostgreSQL (`:5432`), cron y `hey`, todos
+  activos, más `app.py` sirviendo en `:8000` desde el home de `beetle`.
+- **Disco:** el boot volume es de 150 GB; el sistema de archivos reporta 145 GB
+  con 4,4 GB usados y **140 GB libres**. Ojo con la confusión frecuente: los
+  200 GB son la *cuota gratuita de almacenamiento* de la tenancy, no el tamaño
+  del disco. Por eso llenar `/` necesita ~138 GB, no los 18 GB que asume el
+  enunciado de la tarea #203. No es lento: `fallocate` reserva espacio sin
+  escribir bloques, así que es instantáneo a cualquier tamaño.
+- **Tráfico de fondo:** se enciende solo durante una prueba y **por 2 minutos
+  como máximo**, nunca de forma permanente. Usar `hey -z 2m`, jamás `-z 24h`.
+- **Despliegue:** `git pull` automático al hacer merge a `main`, vía
+  `.github/workflows/desplegar.yml`.
+
+### Snapshots: cómo se crean y se listan
+
+**El OCI CLI no está instalado en el VPS y el VPS no tiene credenciales de
+Oracle.** No se pueden listar los backups desde dentro de la máquina. Las dos
+vías son:
+
+| Quién | Cómo |
+|---|---|
+| Con OCI CLI y credenciales | `.github/scripts/crear-snapshot.sh --contar` |
+| Sin credenciales de Oracle | El workflow de Actions corrido sin argumentos |
+
+Para crear uno: `.github/scripts/crear-snapshot.sh <motivo>`, que nombra el
+snapshot como `beetle-<motivo>-AAAA-MM-DD-HHMM`.
+
+**Ese script bloquea la creación del sexto snapshot.** El límite gratuito es 5,
+y **no está verificado** si Oracle rechaza el sexto o simplemente lo cobra. Ante
+la duda el script falla en vez de arriesgar un cargo: hay que borrar uno antes.
+No quites esa salvaguarda sin comprobar primero qué hace Oracle de verdad.
+
+Procedimiento de restauración completo: `docs/runbook-restore.md`.
 
 ---
 
@@ -349,7 +495,10 @@ Cuando el agente produzca documentación o diseño:
   `prompts`.
 - Ejemplo: `feat(detector): add N-cycle persistence to discard transient spikes`
 - Un commit = un cambio lógico. Nada de commits mezclados.
-- `main` protegida con branch protection: los cambios entran por PR (tarea #166).
+- `main` **no** tiene branch protection activa hoy (verificado 2026-08-19: la API
+  responde *"Branch not protected"*). La tarea #166 la da por configurada, así que
+  o se activa o se corrige el enunciado. Mientras tanto se puede empujar directo a
+  `main`, pero el criterio del proyecto sigue siendo un commit = un cambio lógico.
 - Nunca commitear `.env`, credenciales, informes reales ni evidencia sin sanitizar.
 
 ---
