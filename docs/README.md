@@ -12,6 +12,7 @@ docs/
 ├── doctor-jk-roadmap.md             # fases y cronograma
 ├── doctor-jk-tareas.md              # 56 tareas con criterio de avance
 ├── links.md                         # enlaces de trabajo del equipo
+├── runbook-restore.md               # cómo restaurar el VPS desde snapshot (#168)
 ├── arquitectura.md                  # (pendiente) detalle técnico para quien toque el código
 └── sanitizador_limitaciones.md      # (pendiente) qué NO cubre la sanitización
 ```
@@ -24,6 +25,7 @@ docs/
 | [doctor-jk-roadmap.md](doctor-jk-roadmap.md) | Las 10 fases con su duración y su lista de recorte |
 | [doctor-jk-tareas.md](doctor-jk-tareas.md) | Issues #166–#221, cada una con qué hacer, por qué importa y criterio de avance |
 | [links.md](links.md) | Canva, formularios y repositorios de referencia |
+| [runbook-restore.md](runbook-restore.md) | Restauración del VPS: procedimiento, quién puede ejecutarla, política de snapshots y el gotcha de Tailscale |
 
 ## Qué falta escribir
 
