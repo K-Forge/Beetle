@@ -1,0 +1,72 @@
+name: Restaurar beetle-vps desde snapshot
+
+# El boton de restauracion del equipo. Cualquiera con acceso al repo puede
+# devolver el VPS a un snapshot sin tener credenciales de Oracle ni el OCI CLI.
+# Cada ejecucion queda registrada en el historial de Actions: quien, cuando y
+# desde que backup.
+
+on:
+  workflow_dispatch:
+    inputs:
+      backup:
+        description: "Nombre exacto del backup (dejar vacio para solo listar)"
+        required: false
+        default: ""
+      confirmar:
+        description: "Escribe RESTAURAR para confirmar. Sin esto, solo lista."
+        required: false
+        default: ""
+
+concurrency:
+  group: restaurar-beetle-vps
+  cancel-in-progress: false
+
+jobs:
+  restaurar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar OCI CLI
+        run: |
+          curl -sSL https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh \
+            -o /tmp/install.sh
+          bash /tmp/install.sh --accept-all-defaults >/dev/null
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Configurar credenciales
+        env:
+          OCI_USER:        ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY:     ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_KEY:         ${{ secrets.OCI_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.oci && chmod 700 ~/.oci
+          printf '%s\n' "$OCI_KEY" > ~/.oci/key.pem
+          chmod 600 ~/.oci/key.pem
+          cat > ~/.oci/config <<EOF
+          [DEFAULT]
+          user=$OCI_USER
+          tenancy=$OCI_TENANCY
+          fingerprint=$OCI_FINGERPRINT
+          key_file=$HOME/.oci/key.pem
+          region=sa-bogota-1
+          EOF
+          chmod 600 ~/.oci/config
+
+      - name: Snapshots disponibles
+        run: .github/scripts/restaurar-snapshot.sh --listar
+
+      - name: Restaurar
+        # Doble llave: hay que dar el nombre del backup Y escribir RESTAURAR.
+        # Sin ambas cosas el workflow solo lista y termina sin tocar el VPS.
+        if: ${{ inputs.confirmar == 'RESTAURAR' && inputs.backup != '' }}
+        env:
+          RESTORE_CONFIRMADO: "si"
+        run: .github/scripts/restaurar-snapshot.sh "${{ inputs.backup }}"
+
+      - name: Nada que hacer
+        if: ${{ inputs.confirmar != 'RESTAURAR' || inputs.backup == '' }}
+        run: |
+          echo "Solo se listaron los snapshots."
+          echo "Para restaurar de verdad: pon el nombre del backup y escribe RESTAURAR en 'confirmar'."
