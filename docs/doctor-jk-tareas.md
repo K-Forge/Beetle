@@ -70,10 +70,25 @@ Tomar un snapshot del VPS recién configurado, antes de instalar carga realista 
 
 ## Qué se debe hacer
 
-- Tomar un boot volume backup desde la consola de Oracle Cloud
-- Nombrar el snapshot con fecha y descripción (ej: `base-limpia-2026-08-XX`)
-- Probar la restauración: crear una instancia desde el backup y verificar que el VPS vuelve al estado exacto
+- Tomar un boot volume backup (`oci bv boot-volume-backup create --type FULL`)
+- Nombrar el snapshot con fecha y motivo (ej: `beetle-base-2026-08-18`)
+- Probar la restauración **terminando la instancia y lanzando una nueva** desde el backup, y verificar que el VPS vuelve al estado exacto
 - Documentar el procedimiento para que cualquier miembro del equipo pueda restaurar
+
+> **Nota (2026-08-18).** El enunciado original —"crear una instancia desde el
+> backup"— **es el correcto**, y quedó verificado end-to-end. En OCI un boot
+> volume restaurado no se puede adjuntar a una instancia existente (*"It can only
+> be attached to its parent instance"*), así que no hay alternativa: hay que
+> terminar y relanzar.
+>
+> Lo que sí hay que tener en cuenta es la cuota: las 2 OCPUs ARM están todas en
+> uso y una instancia apagada las sigue consumiendo, así que la vieja se termina
+> **antes** de lanzar la nueva. Igual con el disco: 150 + 150 GB no caben en los
+> 200 GB gratuitos, por eso se termina con `--preserve-boot-volume false`.
+>
+> Tras restaurar cambian el OCID de la instancia, la IP privada y el host key de
+> SSH; la IP pública reservada `BEETLE-IP` se conserva. Duración medida: ~13 min.
+> Ver [runbook-restore.md](runbook-restore.md).
 
 ## Por qué importa
 
@@ -81,7 +96,11 @@ Las pruebas de Fase 8 rompen el servidor intencionalmente (disco lleno, OOM, ser
 
 ## Criterio de avance
 
-El VPS puede restaurarse desde el snapshot. Documentar el tiempo real de restauración en Oracle (típicamente 5–15 minutos, no 60 segundos como una VM local).
+El VPS puede restaurarse desde el snapshot. Documentar el tiempo real de restauración en Oracle (10–20 minutos con el swap de boot volume, no 60 segundos como una VM local).
+
+Además: Mauricio puede restaurar **sin credenciales de Oracle y sin poder borrar backups**, vía el workflow `Restaurar beetle-vps desde snapshot` en GitHub Actions. El grupo IAM `beetle-restore` tiene `read` sobre los backups, no `manage`.
+
+**Ojo con Tailscale:** el snapshot incluye el estado de `tailscaled`, así que el VPS restaurado vuelve con su identidad vieja de tailnet. Desactivar la expiración de llave del nodo y conservar SSH por IP reservada como vía alterna.
 
 ---
 
