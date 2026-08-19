@@ -8,6 +8,17 @@
 # bastan para que la evidencia ya no este.
 #
 # Corre como proceso de fondo junto al monitor. Los mensajes van a journald.
+#
+# POR QUE -p warning Y NO -p err (la tarea #172 pedia -p err):
+# systemd NO registra la caida de un servicio como error. Medido en beetle-vps
+# matando PostgreSQL con SIGKILL:
+#
+#   "Control process exited, code=exited"   -> prioridad 5 (notice)
+#   "Failed with result 'exit-code'"        -> prioridad 4 (warning)
+#
+# Con -p err (prioridades 0-3) el trigger queda CIEGO ante exactamente el
+# incidente que el agente existe para atrapar. Se usa -p warning, que cubre 0-4.
+# El ruido extra que eso trae se corta con IGNORE_PATTERNS y con el cooldown.
 
 set -euo pipefail
 
@@ -33,6 +44,10 @@ IGNORE_PATTERNS=(
   "Broken pipe"                     # cliente que corta la conexion
   "Connection reset by peer"
   "audit:"                          # auditd es verboso y no diagnostica nada
+  "ssh-session("                    # tailscaled anota cada sesion SSH del equipo
+  "Deactivated successfully"        # systemd al cerrar unidades de rutina
+  "Stopped target"
+  "session-c"                       # sesiones de login abriendo y cerrando
 )
 
 log() { logger -t "$LOG_TAG" -- "$*"; }
@@ -88,7 +103,7 @@ while IFS= read -r line; do
 
   last_fire="$now"
   fire_agent "$line"
-done < <(journalctl -f -p err -o short-iso -n 0)
+done < <(journalctl -f -p warning -o short-iso -n 0)
 
 # Solo se llega aqui si journalctl murio. systemd reinicia la unidad.
 log "journalctl termino inesperadamente; saliendo para que systemd reinicie"
