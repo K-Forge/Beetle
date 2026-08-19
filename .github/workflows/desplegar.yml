@@ -49,9 +49,10 @@ jobs:
       - name: git pull en el VPS
         run: |
           # El runner no activa MagicDNS, asi que el nombre del nodo no resuelve
-          # por DNS. Se pregunta al propio Tailscale, que ademas es robusto si la
-          # IP del tailnet cambiara.
-          VPS_IP=$(tailscale ip -4 "$VPS_HOST")
+          # por DNS -- y "tailscale ip" tampoco sirve, porque tambien hace lookup.
+          # Se consulta el estado del daemon, que no pasa por DNS en absoluto.
+          VPS_IP=$(tailscale status --json \
+            | jq -re --arg h "$VPS_HOST" '.Peer[] | select(.HostName==$h) | .TailscaleIPs[0]')
           echo "beetle-vps -> $VPS_IP"
           ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 \
               "$VPS_USER@$VPS_IP" \
