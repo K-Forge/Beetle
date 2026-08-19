@@ -495,10 +495,13 @@ Cuando el agente produzca documentación o diseño:
   `prompts`.
 - Ejemplo: `feat(detector): add N-cycle persistence to discard transient spikes`
 - Un commit = un cambio lógico. Nada de commits mezclados.
-- `main` **no** tiene branch protection activa hoy (verificado 2026-08-19: la API
-  responde *"Branch not protected"*). La tarea #166 la da por configurada, así que
-  o se activa o se corrige el enunciado. Mientras tanto se puede empujar directo a
-  `main`, pero el criterio del proyecto sigue siendo un commit = un cambio lógico.
+- `main` está protegida por un **ruleset** llamado `main protection` (activo)
+  que bloquea force-push (`non_fast_forward`), borrado (`deletion`) y `update`.
+  Los administradores del repo pueden empujar directo; el resto entra por PR.
+- **Ojo al verificarlo:** la API clásica `repos/{owner}/{repo}/branches/main/protection`
+  responde `404 Branch not protected` aunque el ruleset esté activo, porque son
+  dos mecanismos distintos. Para comprobarlo de verdad hay que consultar
+  `repos/{owner}/{repo}/rulesets`.
 - Nunca commitear `.env`, credenciales, informes reales ni evidencia sin sanitizar.
 
 ---
