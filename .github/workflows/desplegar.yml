@@ -51,8 +51,22 @@ jobs:
           # El runner no activa MagicDNS, asi que el nombre del nodo no resuelve
           # por DNS -- y "tailscale ip" tampoco sirve, porque tambien hace lookup.
           # Se consulta el estado del daemon, que no pasa por DNS en absoluto.
-          VPS_IP=$(tailscale status --json \
-            | jq -re --arg h "$VPS_HOST" '.Peer[] | select(.HostName==$h) | .TailscaleIPs[0]')
+          # Los peers tardan un momento en poblarse tras unirse. Si tras 30 s el
+          # nodo sigue sin aparecer, no es lentitud: es que la ACL del tailnet no
+          # le permite a tag:ci ver tag:beetle.
+          for i in $(seq 1 15); do
+            VPS_IP=$(tailscale status --json \
+              | jq -r --arg h "$VPS_HOST" '(.Peer // {})[] | select(.HostName==$h) | .TailscaleIPs[0]' \
+              | head -1)
+            [ -n "$VPS_IP" ] && break
+            sleep 2
+          done
+          if [ -z "$VPS_IP" ]; then
+            echo "::error::$VPS_HOST no aparece en el tailnet tras 30 s."
+            echo "Revisa la ACL: tag:ci necesita acceso a tag:beetle y permiso ssh como '$VPS_USER'."
+            tailscale status || true
+            exit 1
+          fi
           echo "beetle-vps -> $VPS_IP"
           ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 \
               "$VPS_USER@$VPS_IP" \
