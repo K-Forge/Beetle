@@ -252,9 +252,19 @@ equipo cambia de red constantemente. Las dos defensas reales son que SSH es
 nunca fue la seguridad, solo reducción de superficie. Si alguna vez se quiere
 volver a restringir por IP, `.github/scripts/abrir-ssh.sh <etiqueta>` lo hace.
 
-SSH está en modo solo-llave (`PasswordAuthentication no`) y se sirve por
-activación de socket (`ssh.socket`, no `ssh.service` — `systemctl is-active ssh`
-reporta `inactive` y eso es normal en Ubuntu 24.04).
+El SSH público exige **dos factores**: `AuthenticationMethods publickey,password`
+en `/etc/ssh/sshd_config.d/60-2fa.conf`. La contraseña sola nunca basta, así que
+tener `PasswordAuthentication yes` no reabre el riesgo de fuerza bruta — protege
+del caso de llave privada robada. Solo `beetle` puede entrar así; `root` tiene la
+contraseña bloqueada y entra únicamente por Tailscale SSH, que no pasa por `sshd`
+y por tanto no se ve afectado por esta regla.
+
+**Trampa al tocar la config de SSH:** `ssh.socket` arranca un `sshd -D`
+persistente en la primera conexión. `sshd -T` mostrará la configuración nueva
+mientras el daemon en marcha sigue con la vieja, y `systemctl reload ssh.socket`
+recarga el socket, no el daemon. Hay que hacer `systemctl restart ssh.service` y
+**comprobar el comportamiento real**, no solo `sshd -T`. (`systemctl is-active
+ssh` reporta `inactive` antes de la primera conexión y eso es normal.)
 
 **El puerto 80 sí está expuesto** desde el 2026-08-19 (verificado: `HTTP 200`
 desde fuera). Era necesario para el criterio de avance de #169 y para la demo en
