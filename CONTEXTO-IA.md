@@ -297,7 +297,24 @@ puerto que no responde desde fuera casi siempre es esto, no Oracle.
 - **Tráfico de fondo:** se enciende solo durante una prueba y **por 2 minutos
   como máximo**, nunca de forma permanente. Usar `hey -z 2m`, jamás `-z 24h`.
 - **Despliegue:** `git pull` automático al hacer merge a `main`, vía
-  `.github/workflows/desplegar.yml`.
+  `.github/workflows/desplegar.yml`. El runner entra por Tailscale SSH como
+  `tag:ci`, sin llave privada en los secrets del repo.
+
+### La ACL del tailnet NO se edita en la consola
+
+Vive versionada en **`13rianVargas/OracleVPS`**, en `tailscale/policy.hujson`, y
+se aplica con `scripts/push-acl.sh` de ese mismo repo (valida, respalda y solo
+entonces sube). **Cualquier cambio hecho a mano en la consola web se pierde en el
+siguiente push.** Ya pasó: `tag:ci` se había creado a mano en la consola y no
+estaba en el archivo, así que el siguiente push lo habría borrado dejando muerta
+la credencial de CI.
+
+Quien necesite tocar permisos del tailnet edita ese archivo, no la consola.
+
+Dato que ahorra tiempo: **los *trust credentials* de Tailscale no sirven para la
+API de ACL**, aunque ofrezcan el scope `policy_file` — devuelven 403 hasta para
+leer. Hace falta un *API access token* clásico de Settings → Keys, que es de
+acceso completo y expira a los 90 días como máximo.
 
 ### Snapshots: cómo se crean y se listan
 
