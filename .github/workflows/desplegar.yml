@@ -1,0 +1,58 @@
+name: Desplegar a beetle-vps
+
+# Hace git pull en el VPS cada vez que algo entra a main.
+#
+# Entra por Tailscale SSH, no por IP publica ni con llave privada:
+#   - el security list de la subred no tiene ninguna regla TCP de entrada
+#     (solo UDP e ICMP), asi que el tailnet es la unica via;
+#   - beetle-vps usa Tailscale SSH, que autentica por identidad de tailnet.
+#     Por eso NO hay ningun secreto de llave SSH aqui: quien decide el acceso
+#     es la ACL del tailnet, no un archivo en los secrets del repo.
+#
+# El runner se une como nodo efimero con tag:ci y desaparece al terminar.
+#
+# Requiere en el repo:
+#   secrets.TS_OAUTH_CLIENT_ID / TS_OAUTH_SECRET
+#
+# Y en las ACL del tailnet:
+#   "tagOwners": { "tag:ci": ["autogroup:admin"] },
+#   "ssh": [
+#     { "action": "accept", "src": ["tag:ci"], "dst": ["tag:beetle"],
+#       "users": ["beetle"] }
+#   ]
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: desplegar-beetle-vps
+  cancel-in-progress: true
+
+env:
+  VPS_HOST: beetle-vps
+  VPS_USER: beetle
+  VPS_REPO: /home/beetle/Beetle
+
+jobs:
+  desplegar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Unirse al tailnet
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: git pull en el VPS
+        run: |
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 \
+              "$VPS_USER@$VPS_HOST" \
+              "cd $VPS_REPO && git rev-parse --short HEAD && git fetch --prune origin && git reset --hard origin/main && git rev-parse --short HEAD"
+
+      - name: Resumen
+        if: always()
+        run: |
+          echo "Commit desplegado: ${{ github.sha }} por ${{ github.actor }}"
