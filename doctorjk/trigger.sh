@@ -24,9 +24,20 @@ set -euo pipefail
 
 # --------------------------------------------------------------- configuracion
 
-# Como se invoca el agente. Se deja en una sola variable porque doctorjk/main.py
-# todavia no existe: cuando exista, esto es lo unico que cambia.
-AGENT_CMD="${DOCTORJK_AGENT_CMD:-/usr/bin/python3 -m doctorjk.main}"
+# Raiz del paquete, deducida de donde vive este script. Asi el trigger funciona
+# igual corriendo desde el repo, desde /opt/doctorjk o desde systemd, sin
+# depender del directorio de trabajo.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Que se invoca al detectar un fallo. Hoy es una captura puntual del monitor:
+# toma una muestra del estado del servidor en el instante del error, que es
+# justamente lo que el polling de 30 s no alcanza a ver.
+#
+# CABLEADO PROVISIONAL: cuando exista el punto de entrada del agente (issue #222)
+# esto debe apuntar ahi, para que la muestra siga al detector, al recolector y al
+# resto del pipeline. Mientras tanto se captura la evidencia, que es lo que se
+# perderia si no se hiciera nada.
+AGENT_CMD="${DOCTORJK_AGENT_CMD:-/usr/bin/python3 -m doctorjk.monitor --once}"
 
 # Ventana de silencio tras disparar. Un incidente real no produce una linea de
 # error, produce una rafaga: PostgreSQL cayendose escribe decenas en segundos.
@@ -73,8 +84,17 @@ fire_agent() {
   log "error detectado, lanzando el agente: $1"
   # En segundo plano a proposito: si el agente tarda, el trigger tiene que seguir
   # escuchando en vez de quedarse ciego mientras diagnostica.
+  # La salida va a journald via systemd-cat, no a /dev/null: la evidencia
+  # capturada en el instante del fallo es justamente lo que este trigger existe
+  # para no perder. systemd-cat viene con systemd, no agrega dependencias.
+  #
+  # La etiqueta contiene "doctorjk" a proposito, para que is_self() descarte
+  # estas lineas y el agente no se dispare con su propia salida.
+  #
+  # PYTHONPATH para que 'python3 -m doctorjk.monitor' encuentre el paquete sin
+  # depender de que este instalado ni del directorio desde donde se arranco.
   # shellcheck disable=SC2086
-  setsid $AGENT_CMD >/dev/null 2>&1 < /dev/null &
+  PYTHONPATH="$REPO_ROOT" setsid systemd-cat -t doctorjk-agente $AGENT_CMD >/dev/null 2>&1 < /dev/null &
 }
 
 # ------------------------------------------------------------------- ejecucion
