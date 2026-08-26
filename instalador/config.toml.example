@@ -1,0 +1,43 @@
+# Configuración de Doctor J/K. install.sh copia este archivo a
+# /etc/doctorjk/config.toml solo si no existe ya uno (nunca pisa una
+# instalación existente). Los secretos (token del proveedor LLM) NO van acá:
+# viven en /etc/doctorjk/.env, ver .env.example en la raíz del repo.
+
+# Segundos entre ciclos de muestreo del monitor.
+intervalo_monitor_s = 30
+
+# Cuántas muestras consecutivas cruzadas confirman un incidente. Evita que un
+# pico de un solo ciclo dispare una falsa alarma.
+ciclos_persistencia = 2
+
+# Porcentaje de uso de disco a partir del cual se considera "disco lleno".
+disco_pct = 90
+
+# Memoria disponible mínima, en MB, antes de considerar "memoria baja".
+memoria_disponible_mb = 512
+
+# Segundos de espera al verificar si un puerto vigilado sigue escuchando.
+puerto_timeout_s = 60
+
+# Ciclos consecutivos con un servicio fallido antes de confirmar el incidente.
+servicio_ciclos = 2
+
+# Directorio donde quedan los informes .md y su evidencia cruda asociada.
+directorio_informes = "/var/lib/doctorjk/informes"
+
+# Modo de remediación: "diagnostico" (solo redacta), "scripts" (Modo 2,
+# ejecuta correcciones deterministas) o "automatico" (Modo 3, plan generado
+# por el modelo). Una instalación nueva siempre queda en "diagnostico".
+modo_remediacion = "diagnostico"
+
+# Opt-in explícito para que el agente ejecute correcciones de verdad (tarea
+# #210). Sin esto en true (o sin pasar --auto-fix), nunca se ejecuta nada,
+# sin importar modo_remediacion.
+auto_fix = false
+
+# Si es true, el agente genera y valida el plan de corrección pero no lo
+# ejecuta: útil para confiar en el modelo antes de habilitar auto_fix.
+dry_run = true
+
+# Timeout en segundos para cualquier comando externo que el agente ejecute.
+timeout_comando_s = 30
