@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deteccion en tiempo real: escucha el journal y dispara el agente ante un error
+# Deteccion en tiempo real: escucha el journal y avisa al agente ante un error
 # puntual, sin esperar al siguiente ciclo del monitor.
 #
 # Complementa a monitor.py, no lo reemplaza. El polling de 30 s cubre condiciones
@@ -7,7 +7,16 @@
 # pasa de golpe -- un servicio que muere, un OOM kill -- donde 30 s de retraso
 # bastan para que la evidencia ya no este.
 #
-# Corre como proceso de fondo junto al monitor. Los mensajes van a journald.
+# Corre como proceso de fondo junto al monitor, en su propia unidad systemd
+# (doctorjk-trigger.service, Gate E). Los mensajes van a journald.
+#
+# CONTRATO FIFO (plan-mvp.md §3.1): este script NO lanza el agente ni declara
+# incidentes. doctorjk/main.py es el unico dueno del estado -- mantiene abierto
+# un FIFO local y corre su propio detector residente. Este script solo escribe
+# una senal fija en ese FIFO cuando ve una linea relevante; main.py toma la
+# muestra real. Tampoco repite la linea cruda del journal en su propio log: esa
+# linea puede traer datos sensibles y el agente ya la puede recuperar del
+# journal si hace falta.
 #
 # POR QUE -p warning Y NO -p err (la tarea #172 pedia -p err):
 # systemd NO registra la caida de un servicio como error. Medido en beetle-vps
@@ -24,14 +33,14 @@ set -euo pipefail
 
 # --------------------------------------------------------------- configuracion
 
-# Como se invoca el agente. Se deja en una sola variable porque doctorjk/main.py
-# todavia no existe: cuando exista, esto es lo unico que cambia.
-AGENT_CMD="${DOCTORJK_AGENT_CMD:-/usr/bin/python3 -m doctorjk.main}"
+# Mismo FIFO que abre doctorjk/main.py. Una sola variable de entorno para que
+# la unidad systemd de ambos procesos la fije igual (Gate E).
+FIFO_PATH="${DOCTORJK_FIFO_PATH:-/run/doctorjk/trigger.fifo}"
 
 # Ventana de silencio tras disparar. Un incidente real no produce una linea de
 # error, produce una rafaga: PostgreSQL cayendose escribe decenas en segundos.
-# Sin esto se lanzaria un agente por linea y se saturaria la maquina que se
-# supone estamos diagnosticando.
+# Sin esto se escribiria en el FIFO por cada linea y se saturaria el ciclo del
+# agente con la misma rafaga una y otra vez.
 COOLDOWN_S="${DOCTORJK_TRIGGER_COOLDOWN:-120}"
 
 LOG_TAG="doctorjk-trigger"
@@ -69,12 +78,19 @@ is_self() {
   [[ "$1" == *"doctorjk"* ]]
 }
 
-fire_agent() {
-  log "error detectado, lanzando el agente: $1"
-  # En segundo plano a proposito: si el agente tarda, el trigger tiene que seguir
-  # escuchando en vez de quedarse ciego mientras diagnostica.
-  # shellcheck disable=SC2086
-  setsid $AGENT_CMD >/dev/null 2>&1 < /dev/null &
+notify_agent() {
+  # No se registra la linea cruda ($1): solo que hubo una senal. El agente ya
+  # puede ir al journal si necesita el detalle, y asi este log nunca duplica
+  # algo potencialmente sensible.
+  log "linea relevante detectada, senal enviada al orquestador"
+
+  # abrir un FIFO en escritura (">") bloquea hasta que alguien lo tenga
+  # abierto en lectura. Si main.py no esta corriendo, eso colgaria este loop
+  # entero y el trigger dejaria de escuchar el journal. Se acota con timeout
+  # en vez de confiar en que main.py siempre este arriba.
+  if ! timeout 2 bash -c "printf '1\n' > '$FIFO_PATH'" 2>/dev/null; then
+    log "no se pudo escribir en $FIFO_PATH; el orquestador no esta escuchando?"
+  fi
 }
 
 # ------------------------------------------------------------------- ejecucion
@@ -84,7 +100,7 @@ command -v journalctl >/dev/null 2>&1 || {
   exit 1
 }
 
-log "trigger iniciado (cooldown ${COOLDOWN_S}s, agente: ${AGENT_CMD})"
+log "trigger iniciado (cooldown ${COOLDOWN_S}s, fifo: ${FIFO_PATH})"
 
 last_fire=0
 
@@ -102,7 +118,7 @@ while IFS= read -r line; do
   fi
 
   last_fire="$now"
-  fire_agent "$line"
+  notify_agent "$line"
 done < <(journalctl -f -p warning -o short-iso -n 0)
 
 # Solo se llega aqui si journalctl murio. systemd reinicia la unidad.

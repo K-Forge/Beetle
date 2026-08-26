@@ -1,0 +1,26 @@
+[project]
+name = "doctorjk"
+version = "0.1.0.dev0"
+description = "Agente que detecta, diagnostica y opcionalmente corrige incidentes en un servidor Linux"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+doctorjk = "doctorjk.main:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["doctorjk*"]
+
+[tool.pytest.ini_options]
+testpaths = ["pruebas/unitarias"]

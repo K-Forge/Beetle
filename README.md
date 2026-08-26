@@ -38,8 +38,11 @@ y las convenciones que debe respetar.
 
 ## Estado
 
-Estructura del repositorio creada (tarea #166). Sin código todavía — la Fase 1 arranca por
-`monitor.py` y `trigger.sh`.
+Fase 1 en curso. `doctorjk/monitor.py` muestrea servicios, disco, memoria, puertos y carga, y
+normaliza esas lecturas a señales (tarea #173). `doctorjk/main.py` es el orquestador de larga
+vida: mantiene el FIFO que conecta con `trigger.sh` y toma una muestra ante cada tick de polling
+o cada señal en tiempo real. Detector, recolector, sanitizador, cliente LLM e informes (Fases
+2–5) todavía no están implementados — ver [docs/plan-mvp.md](docs/plan-mvp.md) para la secuencia.
 
 ## Los tres modos
 

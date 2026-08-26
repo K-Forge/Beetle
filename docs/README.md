@@ -11,6 +11,7 @@ docs/
 ├── doctor-jk-proyecto.md            # documento maestro (v4.0)
 ├── doctor-jk-roadmap.md             # fases y cronograma
 ├── doctor-jk-tareas.md              # 56 tareas con criterio de avance
+├── plan-mvp.md                       # secuencia ejecutable y gates del MVP v0.1
 ├── links.md                         # enlaces de trabajo del equipo
 ├── runbook-restore.md               # cómo restaurar el VPS desde snapshot (#168)
 ├── arquitectura.md                  # (pendiente) detalle técnico para quien toque el código
@@ -24,6 +25,7 @@ docs/
 | [doctor-jk-proyecto.md](doctor-jk-proyecto.md) | Ikigai, problema, solución, arquitectura, stack, costos, prompt, remediador, escenarios, métricas, riesgos, modelo de producto |
 | [doctor-jk-roadmap.md](doctor-jk-roadmap.md) | Las 10 fases con su duración y su lista de recorte |
 | [doctor-jk-tareas.md](doctor-jk-tareas.md) | Issues #166–#221, cada una con qué hacer, por qué importa y criterio de avance |
+| [plan-mvp.md](plan-mvp.md) | Auditoría del estado y plan secuencial del MVP v0.1, con dependencias, pruebas y gates de salida |
 | [links.md](links.md) | Canva, formularios y repositorios de referencia |
 | [runbook-restore.md](runbook-restore.md) | Restauración del VPS: procedimiento, quién puede ejecutarla, política de snapshots y el gotcha de Tailscale |
 

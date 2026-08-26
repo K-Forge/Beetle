@@ -1,0 +1,3 @@
+Filesystem      Use% Mounted on
+/dev/sda1        97% /
+tmpfs             1% /dev/shm

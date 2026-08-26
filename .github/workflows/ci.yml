@@ -1,0 +1,42 @@
+name: CI
+
+# Compila el paquete, corre las pruebas unitarias y valida la sintaxis de los
+# scripts bash en cada PR y en cada push a main. No toca el VPS ni ningun
+# secreto: corre por completo en el runner de GitHub (plan-mvp.md bloque A2).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  probar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar el paquete en modo editable con las dependencias de desarrollo
+        run: python3 -m pip install -e ".[dev]"
+
+      - name: Compilar el paquete y las pruebas
+        run: python3 -m compileall doctorjk pruebas/unitarias
+
+      - name: Ejecutar pruebas unitarias
+        run: python3 -m pytest pruebas/unitarias -q
+
+      - name: Instalar shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Validar sintaxis y shellcheck sobre los scripts bash existentes
+        run: |
+          mapfile -t scripts < <(find doctorjk instalador scripts-fix demo -type f -name '*.sh' 2>/dev/null)
+          if [ "${#scripts[@]}" -eq 0 ]; then
+            echo "todavia no hay scripts bash en el repo"
+            exit 0
+          fi
+          bash -n "${scripts[@]}"
+          shellcheck "${scripts[@]}"
