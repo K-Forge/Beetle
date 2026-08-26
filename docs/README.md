@@ -15,7 +15,7 @@ docs/
 ├── links.md                         # enlaces de trabajo del equipo
 ├── runbook-restore.md               # cómo restaurar el VPS desde snapshot (#168)
 ├── arquitectura.md                  # (pendiente) detalle técnico para quien toque el código
-└── sanitizador_limitaciones.md      # (pendiente) qué NO cubre la sanitización
+└── sanitizador_limitaciones.md      # qué NO cubre la sanitización (#185)
 ```
 
 ## Qué hay hoy
@@ -28,15 +28,12 @@ docs/
 | [plan-mvp.md](plan-mvp.md) | Auditoría del estado y plan secuencial del MVP v0.1, con dependencias, pruebas y gates de salida |
 | [links.md](links.md) | Canva, formularios y repositorios de referencia |
 | [runbook-restore.md](runbook-restore.md) | Restauración del VPS: procedimiento, quién puede ejecutarla, política de snapshots y el gotcha de Tailscale |
+| [sanitizador_limitaciones.md](sanitizador_limitaciones.md) | Seis escenarios que el sanitizador por patrones NO cubre, con su riesgo residual (tarea #185) |
 
 ## Qué falta escribir
 
 - **`arquitectura.md`** — el detalle técnico que no cabe en el documento de proyecto: contratos
   entre módulos, formato de la evidencia, formato del plan de corrección del Modo 3.
-- **`sanitizador_limitaciones.md`** — lo que la sanitización por patrones no cubre, con al menos
-  tres escenarios concretos (tarea #185). Es transparencia con el cliente, no una nota interna:
-  el documento de proyecto ya admite que "un dato sensible con formato inesperado puede
-  escaparse" y esta es la versión detallada de esa admisión.
 
 ## Convención
 
