@@ -46,3 +46,18 @@ dry_run = true
 
 # Timeout en segundos para cualquier comando externo que el agente ejecute.
 timeout_comando_s = 30
+
+# --- Modelo de diagnóstico -------------------------------------------------
+# Cloudflare Workers AI y DeepSeek hablan el mismo formato OpenAI-compatible:
+# cambiar de proveedor es cambiar estas dos líneas, no el código.
+llm_url = "https://api.cloudflare.com/client/v4/accounts/TU_CUENTA/ai/v1/chat/completions"
+llm_modelo = "gpt-oss-120b"
+llm_timeout_s = 30
+
+# Solo desarrollo: reutiliza respuestas anteriores en vez de llamar al proveedor.
+# Nunca activar en producción.
+llm_cache = false
+
+# La credencial NO va aquí. Se pasa por la variable de entorno
+# DOCTORJK_LLM_API_KEY, porque este archivo lo edita el cliente y puede
+# terminar en un backup o en un repositorio.

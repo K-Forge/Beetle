@@ -21,6 +21,10 @@ modo_remediacion = "diagnostico"
 auto_fix = false
 dry_run = true
 timeout_comando_s = 30
+llm_url = "https://proveedor.example/v1/chat/completions"
+llm_modelo = "gpt-oss-120b"
+llm_timeout_s = 30
+llm_cache = false
 """
 
 

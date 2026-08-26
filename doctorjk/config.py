@@ -10,6 +10,7 @@
 # el monitor arranque (CONTEXTO-IA.md §8.1, "fail fast").
 from __future__ import annotations
 
+import os
 import tomllib
 from dataclasses import dataclass
 from enum import Enum
@@ -53,6 +54,13 @@ class AppConfig:
     auto_fix: bool
     dry_run: bool
     command_timeout_s: float
+    llm_url: str
+    llm_model: str
+    llm_timeout_s: float
+    llm_cache: bool
+    # La credencial NO viene del TOML: solo del entorno (plan-mvp.md §3.3).
+    # Queda vacía si no está definida; llm.py falla con mensaje claro al usarla.
+    llm_api_key: str = ""
 
 
 _Validador = Callable[[object], object]
@@ -124,6 +132,15 @@ def _modo_remediacion(nombre_clave: str) -> _Validador:
 # archivo que no esté acá se rechaza como desconocida; cualquier clave de acá
 # ausente del archivo se rechaza como faltante. Ninguna clave tiene default
 # implícito: una instalación nueva copia config.toml.example completo.
+def _texto_no_vacio(nombre_clave: str) -> _Validador:
+    def validar(valor: object) -> object:
+        if not isinstance(valor, str) or not valor.strip():
+            raise ConfigError(f"'{nombre_clave}' debe ser un texto no vacío, se recibió {valor!r}")
+        return valor.strip()
+
+    return validar
+
+
 _ESQUEMA: dict[str, tuple[str, _Validador]] = {
     "intervalo_monitor_s": (
         "monitor_interval_s",
@@ -155,7 +172,16 @@ _ESQUEMA: dict[str, tuple[str, _Validador]] = {
         "command_timeout_s",
         _numero_positivo("timeout_comando_s", (int, float)),
     ),
+    "llm_url": ("llm_url", _texto_no_vacio("llm_url")),
+    "llm_modelo": ("llm_model", _texto_no_vacio("llm_modelo")),
+    "llm_timeout_s": ("llm_timeout_s", _numero_positivo("llm_timeout_s", (int, float))),
+    "llm_cache": ("llm_cache", _booleano("llm_cache")),
 }
+
+# Variable de entorno que trae la credencial del proveedor. Se lee aparte del
+# TOML a propósito: config.toml lo edita el cliente y puede terminar en un
+# backup o en un repo; la credencial no debe estar ahí.
+LLM_API_KEY_ENV = "DOCTORJK_LLM_API_KEY"
 
 
 def load_config(path: Path) -> AppConfig:
@@ -192,6 +218,8 @@ def load_config(path: Path) -> AppConfig:
     # auto_fix ejecuta correcciones de verdad; dry_run las simula sin tocar el
     # servidor. Que ambas sean true a la vez es la misma incompatibilidad que
     # main.py ya rechaza entre --auto-fix y --dry-run (tarea #210).
+    valores["llm_api_key"] = os.environ.get(LLM_API_KEY_ENV, "")
+
     if valores["auto_fix"] and valores["dry_run"]:
         raise ConfigError(
             f"{path}: 'auto_fix' y 'dry_run' no pueden ser true a la vez — uno ejecuta "
@@ -211,4 +239,9 @@ def load_config(path: Path) -> AppConfig:
         auto_fix=valores["auto_fix"],
         dry_run=valores["dry_run"],
         command_timeout_s=valores["command_timeout_s"],
+        llm_url=valores["llm_url"],
+        llm_model=valores["llm_model"],
+        llm_timeout_s=valores["llm_timeout_s"],
+        llm_cache=valores["llm_cache"],
+        llm_api_key=valores["llm_api_key"],
     )
