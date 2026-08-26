@@ -1,9 +1,9 @@
-# Pruebas del recolector (tareas #179-181, plan-mvp.md bloque C1).
+# Pruebas del recolector (tareas #179-183, plan-mvp.md bloques C1 y C2).
 #
-# Los parsers puros (truncate_oldest_lines, parse_dpkg_log, render_snapshot_text)
-# se prueban con datos sintéticos, igual que test_monitor.py. El ensamblado
-# completo (collect_evidence) se prueba con doctorjk.recolector.run_command y
-# take_snapshot reemplazados: journalctl/find/systemctl reales dependen del
+# Los parsers puros (truncate_oldest_lines, parse_dpkg_log, render_snapshot_text,
+# apply_token_budget) se prueban con datos sintéticos, igual que test_monitor.py.
+# El ensamblado completo (collect_evidence) se prueba con doctorjk.recolector.run_command
+# y take_snapshot reemplazados: journalctl/find/systemctl reales dependen del
 # sistema donde corran los tests y no son deterministas.
 from __future__ import annotations
 
@@ -256,3 +256,156 @@ def test_collect_evidence_historial_lista_informes_previos_mas_recientes_primero
     lineas = evidencia.history_text.splitlines()
     assert lineas[0] == nuevo.name
     assert lineas[1] == viejo.name
+
+
+# ------------------------------------------------------------- apply_token_budget
+
+
+SNAPSHOT_EJEMPLO = (
+    "capturado: 2026-08-25T12:00:00+00:00\n"
+    "servicios fallidos: ninguno\n"
+    "disco /: 97% usado (/dev/sda1)\n"
+    "memoria: 512 MB disponibles de 4000 MB\n"
+    "puertos escuchando: ninguno\n"
+    "carga: 0.1 (1m) 0.1 (5m) 0.1 (15m)"
+)
+
+
+def test_apply_token_budget_sin_exceso_no_modifica_nada():
+    logs = "linea\n" * 5
+    logs2, snap2, raw = recolector.apply_token_budget(
+        "meta", logs, "snapshot", "cambios", "historial", SignalType.DISK_FULL, budget_tokens=10_000
+    )
+    assert logs2 == logs
+    assert snap2 == "snapshot"
+    assert "meta" in raw
+
+
+def test_apply_token_budget_recorta_logs_antes_que_el_snapshot():
+    logs = "\n".join(f"linea-de-log-numero-{i}" for i in range(500))
+    logs2, snap2, raw = recolector.apply_token_budget(
+        "meta", logs, SNAPSHOT_EJEMPLO, "cambios", "historial", SignalType.DISK_FULL, budget_tokens=350
+    )
+    assert "TRUNCADO" in logs2
+    assert len(logs2.splitlines()) - 1 < 500  # -1 por la nota de truncado: se recortó de verdad
+    assert snap2 == SNAPSHOT_EJEMPLO  # no hizo falta tocar el snapshot
+
+
+def test_apply_token_budget_reduce_snapshot_si_ni_el_piso_de_logs_alcanza():
+    logs = "\n".join(f"linea-de-log-numero-{i}" for i in range(500))
+    logs2, snap2, raw = recolector.apply_token_budget(
+        "meta", logs, SNAPSHOT_EJEMPLO, "cambios", "historial", SignalType.DISK_FULL, budget_tokens=10
+    )
+    assert "SNAPSHOT REDUCIDO" in snap2
+    assert "disco /" in snap2
+    assert "memoria:" not in snap2  # categoría no relacionada con disk_full, se descarta
+
+
+def test_apply_token_budget_nunca_toca_metadatos():
+    logs = "\n".join(f"linea-{i}" for i in range(500))
+    _, _, raw = recolector.apply_token_budget(
+        "metadato-intacto", logs, SNAPSHOT_EJEMPLO, "cambios", "historial", SignalType.DISK_FULL, budget_tokens=1
+    )
+    assert "metadato-intacto" in raw
+
+
+# --------------------------------------------------------------- write_raw_evidence
+
+
+def test_write_raw_evidence_crea_archivo_con_permisos_600(tmp_path):
+    evidencia = recolector.Evidence(
+        incident=_incidente(),
+        generated_at=CONFIRMADO_EN,
+        metadata_text="meta",
+        logs_text="logs",
+        snapshot_text="snap",
+        changes_text="cambios",
+        history_text="historial",
+        raw_text="contenido completo sin sanitizar",
+        partial_errors=(),
+    )
+
+    destino = recolector.write_raw_evidence(evidencia, tmp_path)
+
+    assert destino.name == "20260825_120000_disk_full_evidencia.txt"
+    assert destino.read_text(encoding="utf-8") == "contenido completo sin sanitizar"
+    assert oct(destino.stat().st_mode)[-3:] == "600"
+
+
+def test_write_raw_evidence_colision_de_nombres_agrega_sufijo(tmp_path):
+    evidencia = recolector.Evidence(
+        incident=_incidente(),
+        generated_at=CONFIRMADO_EN,
+        metadata_text="",
+        logs_text="",
+        snapshot_text="",
+        changes_text="",
+        history_text="",
+        raw_text="primero",
+        partial_errors=(),
+    )
+    destino1 = recolector.write_raw_evidence(evidencia, tmp_path)
+
+    evidencia2 = recolector.Evidence(
+        incident=_incidente(),
+        generated_at=CONFIRMADO_EN,
+        metadata_text="",
+        logs_text="",
+        snapshot_text="",
+        changes_text="",
+        history_text="",
+        raw_text="segundo",
+        partial_errors=(),
+    )
+    destino2 = recolector.write_raw_evidence(evidencia2, tmp_path)
+
+    assert destino1 != destino2
+    assert destino2.name == "20260825_120000_disk_full_2_evidencia.txt"
+    assert destino1.read_text(encoding="utf-8") == "primero"
+    assert destino2.read_text(encoding="utf-8") == "segundo"
+
+
+def test_write_raw_evidence_permisos_insuficientes_propaga_oserror(tmp_path):
+    directorio_sin_escritura = tmp_path / "sin_permiso"
+    directorio_sin_escritura.mkdir(mode=0o500)
+    evidencia = recolector.Evidence(
+        incident=_incidente(),
+        generated_at=CONFIRMADO_EN,
+        metadata_text="",
+        logs_text="",
+        snapshot_text="",
+        changes_text="",
+        history_text="",
+        raw_text="contenido",
+        partial_errors=(),
+    )
+
+    try:
+        with pytest.raises(OSError):
+            recolector.write_raw_evidence(evidencia, directorio_sin_escritura)
+    finally:
+        directorio_sin_escritura.chmod(0o700)  # para que tmp_path se limpie sin problemas
+
+
+def test_write_raw_evidence_disco_lleno_propaga_oserror_y_no_deja_temporal(tmp_path, monkeypatch):
+    def os_open_sin_espacio(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(recolector.os, "open", os_open_sin_espacio)
+
+    evidencia = recolector.Evidence(
+        incident=_incidente(),
+        generated_at=CONFIRMADO_EN,
+        metadata_text="",
+        logs_text="",
+        snapshot_text="",
+        changes_text="",
+        history_text="",
+        raw_text="contenido",
+        partial_errors=(),
+    )
+
+    with pytest.raises(OSError):
+        recolector.write_raw_evidence(evidencia, tmp_path)
+
+    assert list(tmp_path.iterdir()) == []

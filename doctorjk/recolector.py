@@ -1,5 +1,7 @@
 # Recolector: arma la ventana de evidencia alrededor de un incidente ya
-# confirmado por el detector (tareas #179-181, plan-mvp.md bloque C1).
+# confirmado por el detector, la acota a un presupuesto de tokens y guarda
+# una copia cruda sin sanitizar en disco (tareas #179-183, plan-mvp.md
+# bloques C1 y C2).
 #
 # Recibe un Incident, nunca el estado interno del detector (frontera dura,
 # CONTEXTO-IA.md §3), y ensambla un Evidence con 5 secciones etiquetadas:
@@ -10,6 +12,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import socket
 import subprocess
 from datetime import datetime, timedelta
@@ -33,6 +36,15 @@ HISTORY_MAX_ENTRIES = 5
 
 DPKG_LOG_PATH = Path("/var/log/dpkg.log")
 CONFIG_SEARCH_ROOT = Path("/etc")
+
+# Tarea #182: heurística fijada por la tarea (1 token ≈ 4 caracteres) y
+# presupuesto objetivo de ~10k tokens para el bloque de evidencia completo.
+CHARS_PER_TOKEN_ESTIMATE = 4
+TOKEN_BUDGET_DEFAULT = 10_000
+# Piso de líneas de log por debajo del cual no se sigue recortando aunque el
+# presupuesto no alcance: sin esto, un incidente muy ruidoso podría vaciar
+# la sección de logs por completo.
+LOG_LINES_FLOOR = 20
 
 
 def _formatear_marca_de_tiempo(momento: datetime) -> str:
@@ -343,6 +355,100 @@ def _seccion_metadatos(incident: Incident, generated_at: datetime) -> str:
 # --------------------------------------------------------------- ensamblado
 
 
+def _armar_raw_text(metadatos: str, logs: str, snapshot: str, cambios: str, historial: str) -> str:
+    return "\n\n".join(
+        [
+            "=== METADATOS ===\n" + metadatos,
+            "=== LOGS ===\n" + logs,
+            "=== SNAPSHOT ===\n" + snapshot,
+            "=== CAMBIOS RECIENTES ===\n" + cambios,
+            "=== HISTORIAL ===\n" + historial,
+        ]
+    )
+
+
+def estimate_tokens(text: str) -> int:
+    """Heurística fijada por la tarea #182: 1 token ≈ 4 caracteres."""
+    return len(text) // CHARS_PER_TOKEN_ESTIMATE
+
+
+def _reducir_snapshot_a_categoria_del_incidente(snapshot_text: str, signal_type: SignalType) -> str:
+    """#182 paso 2: si truncar logs no alcanza, el snapshot se reduce a la
+    categoría del incidente (p. ej. solo líneas de disco si fue disk_full).
+
+    Sin los umbrales del cliente (config.py, capa superior de este módulo)
+    no se puede decidir "anómalo" métrica por métrica aquí; la categoría del
+    incidente ya confirmado es la mejor aproximación disponible sin acoplar
+    el recolector a la configuración (CONTEXTO-IA.md §8.1: la config se
+    inyecta desde arriba, no se lee dentro de la lógica de negocio).
+    """
+    prefijo_por_tipo = {
+        SignalType.DISK_FULL: "disco ",
+        SignalType.MEMORY_LOW: "memoria:",
+        SignalType.SERVICE_FAILED: "servicios fallidos:",
+        SignalType.PORT_DOWN: "puertos",
+    }
+    prefijo = prefijo_por_tipo.get(signal_type)
+    if prefijo is None:
+        return snapshot_text
+
+    lineas = snapshot_text.splitlines()
+    relevantes = [l for l in lineas if l.startswith("capturado") or l.startswith(prefijo)]
+    if not relevantes:
+        return snapshot_text
+    return "\n".join(relevantes) + "\n[SNAPSHOT REDUCIDO: solo métricas relacionadas con el incidente]"
+
+
+def apply_token_budget(
+    metadata_text: str,
+    logs_text: str,
+    snapshot_text: str,
+    changes_text: str,
+    history_text: str,
+    signal_type: SignalType,
+    budget_tokens: int = TOKEN_BUDGET_DEFAULT,
+) -> tuple[str, str, str]:
+    """Acota la evidencia al presupuesto de tokens (tarea #182).
+
+    Orden de recorte: primero los logs más antiguos (manteniendo un piso de
+    LOG_LINES_FLOOR líneas cercanas al incidente), después el snapshot
+    reducido a la categoría del incidente. Metadatos, cambios recientes e
+    historial nunca se tocan -- metadatos por mandato explícito de la tarea;
+    cambios e historial porque ya son compactos por construcción.
+
+    Devuelve (logs_text, snapshot_text, raw_text) ya ajustados.
+    """
+    logs_actual = logs_text
+    snapshot_actual = snapshot_text
+    raw = _armar_raw_text(metadata_text, logs_actual, snapshot_actual, changes_text, history_text)
+
+    if estimate_tokens(raw) <= budget_tokens:
+        return logs_actual, snapshot_actual, raw
+
+    lineas_originales = logs_text.splitlines()
+    max_lineas = len(lineas_originales)
+    while True:
+        max_lineas = max(LOG_LINES_FLOOR, max_lineas - max(1, max_lineas // 5))
+        recortado, recortadas = truncate_oldest_lines("\n".join(lineas_originales), max_lineas)
+        # La nota de truncado se agrega DENTRO del candidato antes de medir:
+        # su propio tamaño también cuenta para el presupuesto, si no la
+        # comparación de abajo subestima el resultado final.
+        logs_actual = (
+            f"[TRUNCADO: se recortaron {recortadas} líneas de logs antiguos]\n{recortado}"
+            if recortadas
+            else recortado
+        )
+        raw = _armar_raw_text(metadata_text, logs_actual, snapshot_actual, changes_text, history_text)
+        if estimate_tokens(raw) <= budget_tokens or max_lineas == LOG_LINES_FLOOR:
+            break
+
+    if estimate_tokens(raw) > budget_tokens:
+        snapshot_actual = _reducir_snapshot_a_categoria_del_incidente(snapshot_text, signal_type)
+        raw = _armar_raw_text(metadata_text, logs_actual, snapshot_actual, changes_text, history_text)
+
+    return logs_actual, snapshot_actual, raw
+
+
 def collect_evidence(
     incident: Incident,
     reports_dir: Path,
@@ -350,12 +456,13 @@ def collect_evidence(
     command_timeout_s: float = DEFAULT_COMMAND_TIMEOUT_S,
     dpkg_log_path: Path = DPKG_LOG_PATH,
     config_search_root: Path = CONFIG_SEARCH_ROOT,
+    token_budget: int = TOKEN_BUDGET_DEFAULT,
 ) -> Evidence:
     """Punto de entrada del recolector: recibe un Incident ya confirmado y
-    arma la evidencia completa. No conoce el estado interno del detector ni
-    decide nada sobre incidentes -- solo recolecta (frontera dura). Una
-    sección que falla no descarta las demás: el error queda en
-    `partial_errors` y el texto de esa sección lo explica.
+    arma la evidencia completa, acotada al presupuesto de tokens. No conoce
+    el estado interno del detector ni decide nada sobre incidentes -- solo
+    recolecta (frontera dura). Una sección que falla no descarta las demás:
+    el error queda en `partial_errors` y el texto de esa sección lo explica.
     """
     if incident.confirmed_at is None:
         raise ValueError("incident.confirmed_at es obligatorio para recolectar evidencia")
@@ -384,14 +491,8 @@ def collect_evidence(
     if error_historial:
         errores.append(error_historial)
 
-    raw_text = "\n\n".join(
-        [
-            "=== METADATOS ===\n" + metadatos,
-            "=== LOGS ===\n" + logs,
-            "=== SNAPSHOT ===\n" + snapshot_texto,
-            "=== CAMBIOS RECIENTES ===\n" + cambios,
-            "=== HISTORIAL ===\n" + historial,
-        ]
+    logs, snapshot_texto, raw_text = apply_token_budget(
+        metadatos, logs, snapshot_texto, cambios, historial, incident.signal_type, token_budget
     )
 
     return Evidence(
@@ -405,3 +506,51 @@ def collect_evidence(
         raw_text=raw_text,
         partial_errors=tuple(errores),
     )
+
+
+# --------------------------------------------------------- evidencia cruda
+
+
+def _nombre_evidencia(incident: Incident) -> str:
+    assert incident.confirmed_at is not None  # ya validado en collect_evidence
+    marca = incident.confirmed_at.strftime("%Y%m%d_%H%M%S")
+    return f"{marca}_{incident.signal_type.value}_evidencia.txt"
+
+
+def _resolver_nombre_sin_colision(reports_dir: Path, incident: Incident) -> Path:
+    """Tarea #183: si ya existe un archivo con ese nombre (dos incidentes
+    del mismo tipo confirmados en el mismo segundo), se agrega un sufijo
+    numérico en vez de pisar la evidencia anterior."""
+    nombre_base = _nombre_evidencia(incident)
+    destino = reports_dir / nombre_base
+    sufijo = 2
+    raiz = nombre_base[: -len("_evidencia.txt")]
+    while destino.exists():
+        destino = reports_dir / f"{raiz}_{sufijo}_evidencia.txt"
+        sufijo += 1
+    return destino
+
+
+def write_raw_evidence(evidence: Evidence, reports_dir: Path) -> Path:
+    """Guarda la evidencia completa sin sanitizar (tarea #183).
+
+    Esta copia nunca sale del servidor ni se envía al LLM -- eso pasa por
+    sanitizador.py primero (Gate C3). Es la copia de auditoría que el
+    administrador puede comparar contra lo que sí viajó. Creación atómica
+    (escribir a un temporal en el mismo directorio y renombrar) y modo 600,
+    porque trae los mismos datos crudos que journalctl/df/etc: pueden
+    incluir IPs, credenciales o rutas reales.
+    """
+    reports_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    destino = _resolver_nombre_sin_colision(reports_dir, evidence.incident)
+    temporal = destino.parent / (destino.name + ".tmp")
+
+    descriptor = os.open(temporal, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as archivo:
+            archivo.write(evidence.raw_text)
+        os.replace(temporal, destino)
+    except OSError:
+        temporal.unlink(missing_ok=True)
+        raise
+    return destino
