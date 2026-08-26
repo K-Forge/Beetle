@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import re
 
+from doctorjk.modelos import Evidence, SanitizedEvidence
+
 # --------------------------------------------------------------------- IPs
 
 _IPV4_RE = re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b")
@@ -170,3 +172,19 @@ def sanitize(text: str) -> str:
     resultado = _redact_home_paths(resultado)
     resultado = _redact_ips(resultado)
     return resultado
+
+
+def sanitize_evidence(evidence: Evidence) -> SanitizedEvidence:
+    """Convierte `Evidence` cruda en `SanitizedEvidence`, lista para el LLM.
+
+    Es el único punto que produce el tipo que acepta `llm.py`. Trabaja sobre
+    una copia del texto: la evidencia cruda queda intacta en disco y en
+    memoria, porque es la que sirve para auditar después qué se vio de verdad
+    (plan-mvp.md bloque C3, paso 3).
+    """
+    return SanitizedEvidence(
+        incident_id=evidence.incident.incident_id,
+        generated_at=evidence.generated_at,
+        text=sanitize(evidence.raw_text),
+        partial_errors=evidence.partial_errors,
+    )

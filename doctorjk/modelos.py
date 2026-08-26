@@ -133,6 +133,33 @@ class Incident:
 
 
 @dataclass(frozen=True)
+class SanitizedEvidence:
+    """Evidencia que YA pasó por el sanitizador y puede salir del servidor.
+
+    Existe como tipo propio, y no como un `str` cualquiera, para que la
+    frontera de privacidad sea imposible de saltar por descuido: `llm.py`
+    acepta únicamente este contrato, así que no hay forma de pasarle
+    `Evidence.raw_text` sin que salte en revisión o en el type checker.
+    Solo `sanitizador.sanitize_evidence()` la construye.
+    """
+
+    incident_id: str
+    generated_at: datetime
+    text: str
+    partial_errors: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Diagnosis:
+    """Resultado del diagnóstico, venga del modelo o del fallback local."""
+
+    incident_id: str
+    text: str
+    model: str
+    from_fallback: bool
+
+
+@dataclass(frozen=True)
 class Evidence:
     """Evidencia ensamblada para un incidente confirmado (tareas #179-181).
 
