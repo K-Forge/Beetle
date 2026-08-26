@@ -130,3 +130,24 @@ class Incident:
     started_at: datetime
     confirmed_at: datetime | None
     state: IncidentState
+
+
+@dataclass(frozen=True)
+class Evidence:
+    """Evidencia ensamblada para un incidente confirmado (tareas #179-181).
+
+    Cada sección de texto puede quedar vacía o parcial si su recolección
+    falló; en ese caso el motivo queda en `partial_errors`, nunca se descarta
+    la evidencia completa por la falla de una sola sección (plan-mvp.md
+    bloque C1: "evidencia parcial sigue siendo utilizable").
+    """
+
+    incident: Incident
+    generated_at: datetime
+    metadata_text: str
+    logs_text: str
+    snapshot_text: str
+    changes_text: str
+    history_text: str
+    raw_text: str
+    partial_errors: tuple[str, ...]
