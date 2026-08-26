@@ -7,8 +7,13 @@
 intervalo_monitor_s = 30
 
 # Cuántas muestras consecutivas cruzadas confirman un incidente. Evita que un
-# pico de un solo ciclo dispare una falsa alarma.
+# pico de un solo ciclo dispare una falsa alarma. El mismo número de muestras
+# consecutivas sanas resuelve el incidente.
 ciclos_persistencia = 2
+
+# Ciclos consecutivos sanos que debe esperar un incidente ya resuelto antes de
+# volver a "normal" (ventana anti-parpadeo tras la recuperación).
+enfriamiento_ciclos = 2
 
 # Porcentaje de uso de disco a partir del cual se considera "disco lleno".
 disco_pct = 90

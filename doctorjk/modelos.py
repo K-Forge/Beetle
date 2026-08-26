@@ -105,3 +105,28 @@ class TriggerEvent:
 
     occurred_at: datetime
     source: str
+
+
+class IncidentState(str, Enum):
+    """Ciclo de vida de un incidente por clave de señal (tarea #176).
+
+    normal -> candidato -> incidente -> resuelto -> normal. `detector.py`
+    (Gate B) es el único que decide estas transiciones.
+    """
+
+    NORMAL = "normal"
+    CANDIDATE = "candidate"
+    INCIDENT = "incident"
+    RESOLVED = "resolved"
+
+
+@dataclass(frozen=True)
+class Incident:
+    """Un incidente confirmado (o ya resuelto) para una clave de señal."""
+
+    incident_id: str
+    signal_type: SignalType
+    resource_key: str
+    started_at: datetime
+    confirmed_at: datetime | None
+    state: IncidentState

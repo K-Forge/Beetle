@@ -43,6 +43,7 @@ class AppConfig:
 
     monitor_interval_s: float
     persistence_cycles: int
+    cooldown_cycles: int
     disk_pct_threshold: int
     memory_available_mb_threshold: int
     port_timeout_s: float
@@ -132,6 +133,10 @@ _ESQUEMA: dict[str, tuple[str, _Validador]] = {
         "persistence_cycles",
         _numero_positivo("ciclos_persistencia", (int,)),
     ),
+    "enfriamiento_ciclos": (
+        "cooldown_cycles",
+        _numero_positivo("enfriamiento_ciclos", (int,)),
+    ),
     "disco_pct": ("disk_pct_threshold", _porcentaje("disco_pct")),
     "memoria_disponible_mb": (
         "memory_available_mb_threshold",
@@ -196,6 +201,7 @@ def load_config(path: Path) -> AppConfig:
     return AppConfig(
         monitor_interval_s=valores["monitor_interval_s"],
         persistence_cycles=valores["persistence_cycles"],
+        cooldown_cycles=valores["cooldown_cycles"],
         disk_pct_threshold=valores["disk_pct_threshold"],
         memory_available_mb_threshold=valores["memory_available_mb_threshold"],
         port_timeout_s=valores["port_timeout_s"],

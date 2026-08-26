@@ -11,6 +11,7 @@ from doctorjk.config import AppConfig, ConfigError, RemediationMode, load_config
 TOML_VALIDO = """
 intervalo_monitor_s = 30
 ciclos_persistencia = 2
+enfriamiento_ciclos = 2
 disco_pct = 90
 memoria_disponible_mb = 512
 puerto_timeout_s = 60
@@ -35,6 +36,7 @@ def test_config_valida_produce_appconfig_tipado(tmp_path):
     assert isinstance(config, AppConfig)
     assert config.monitor_interval_s == 30
     assert config.persistence_cycles == 2
+    assert config.cooldown_cycles == 2
     assert config.disk_pct_threshold == 90
     assert config.memory_available_mb_threshold == 512
     assert config.port_timeout_s == 60
