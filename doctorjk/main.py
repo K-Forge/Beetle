@@ -7,10 +7,11 @@
 #   - el tick de polling cada --interval segundos;
 #   - una señal de doctorjk-trigger.sh a través de un FIFO local.
 #
-# Hoy (bloque A3) el callback solo registra la muestra: el detector (Fase 2)
-# todavía no existe. --dry-run y --auto-fix ya se validan acá porque son
-# responsabilidad del punto de entrada, pero no los consume nadie hasta que
-# exista el remediador (Gate H).
+# Cada muestra se normaliza a señales, pasa por el detector y, cuando este
+# confirma un incidente, se ejecuta el corte vertical del Modo 1: recolectar
+# evidencia, sanitizarla, diagnosticar e informar (bloque D4). --dry-run y
+# --auto-fix se validan acá porque son responsabilidad del punto de entrada,
+# pero no los consume nadie hasta que exista el remediador (Gate H).
 from __future__ import annotations
 
 import argparse
@@ -21,11 +22,15 @@ import signal
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Sequence
 
-from doctorjk import monitor
-from doctorjk.modelos import SystemSnapshot
+from doctorjk import informe, llm, monitor, recolector, sanitizador
+from doctorjk.config import AppConfig
+from doctorjk.detector import Detector
+from doctorjk.modelos import Incident, SystemSnapshot
+from doctorjk.pipeline import PipelineDeps, handle_incident
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +116,50 @@ def log_snapshot(snapshot: SystemSnapshot) -> None:
         len(snapshot.disks),
         memoria_disponible,
     )
+
+
+def build_pipeline_deps(config: AppConfig, session: object) -> PipelineDeps:
+    """Cablea las implementaciones reales detrás de los contratos del pipeline.
+
+    Es el único lugar donde el Modo 1 conoce módulos concretos; `pipeline.py`
+    solo ve funciones. Cambiar de proveedor o de escritor de informes se hace
+    acá, sin tocar la orquestación.
+    """
+    llm_config = llm.LLMConfig(
+        base_url=config.llm_url,
+        model=config.llm_model,
+        api_key=config.llm_api_key,
+        timeout_s=config.llm_timeout_s,
+        cache_enabled=config.llm_cache,
+        cache_dir=config.reports_dir / ".cache" if config.llm_cache else None,
+    )
+
+    return PipelineDeps(
+        collect_evidence=lambda incident, directorio, ahora: recolector.collect_evidence(
+            incident, reports_dir=directorio, now=ahora
+        ),
+        write_raw_evidence=recolector.write_raw_evidence,
+        sanitize_evidence=sanitizador.sanitize_evidence,
+        diagnose=lambda sanitizada, prompt: llm.diagnose(
+            sanitizada, prompt, llm_config, session
+        ),
+        save_report=informe.save_and_rotate,
+    )
+
+
+def on_incident(
+    incident: Incident,
+    prompt: str,
+    reports_dir: Path,
+    deps: PipelineDeps,
+    now: datetime,
+) -> None:
+    """Puente entre el detector y el pipeline. Nunca deja escapar una excepción:
+    un incidente que falla al procesarse no debe detener la vigilancia."""
+    try:
+        handle_incident(incident, prompt, reports_dir, now, deps)
+    except Exception:  # noqa: BLE001 -- frontera del bucle: se registra y se sigue
+        logger.exception("fallo procesando el incidente %s", incident.incident_id)
 
 
 def build_app(args: argparse.Namespace) -> AppContext:

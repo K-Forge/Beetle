@@ -156,3 +156,60 @@ def test_run_termina_limpio_con_sigterm(tmp_path):
             proceso.kill()
             proceso.wait()
     assert codigo == 0
+
+
+# ------------------------------------------------- cableado del Modo 1 (D4)
+
+
+def test_build_pipeline_deps_arma_los_cinco_contratos(tmp_path):
+    from doctorjk.config import AppConfig, RemediationMode
+    from doctorjk.main import build_pipeline_deps
+
+    config = AppConfig(
+        monitor_interval_s=30.0,
+        persistence_cycles=2,
+        cooldown_cycles=2,
+        disk_pct_threshold=90,
+        memory_available_mb_threshold=512,
+        port_timeout_s=60.0,
+        service_cycles=2,
+        reports_dir=tmp_path,
+        remediation_mode=RemediationMode.DIAGNOSTICO,
+        auto_fix=False,
+        dry_run=True,
+        command_timeout_s=30.0,
+        llm_url="https://proveedor/v1",
+        llm_model="gpt-oss-120b",
+        llm_timeout_s=30.0,
+        llm_cache=False,
+        llm_api_key="k",
+    )
+
+    deps = build_pipeline_deps(config, session=object())
+
+    assert deps.collect_evidence is not None
+    assert deps.sanitize_evidence is not None
+    assert deps.diagnose is not None
+    assert deps.save_report is not None
+    assert deps.write_raw_evidence is not None
+
+
+def test_on_incident_no_deja_escapar_excepciones(tmp_path, caplog):
+    # Un incidente que falla no debe tumbar la vigilancia de los demás.
+    from datetime import datetime, timezone
+
+    from doctorjk.main import on_incident
+    from doctorjk.modelos import Incident, IncidentState, SignalType
+    from doctorjk.pipeline import PipelineDeps
+
+    def revienta(*args, **kwargs):
+        raise RuntimeError("fallo inesperado")
+
+    deps = PipelineDeps(revienta, revienta, revienta, revienta, revienta)
+    ahora = datetime(2026, 8, 26, tzinfo=timezone.utc)
+    incidente = Incident("inc-9", SignalType.SERVICE_FAILED, "x", ahora, ahora, IncidentState.INCIDENT)
+
+    with caplog.at_level("ERROR"):
+        on_incident(incidente, "prompt", tmp_path, deps, ahora)
+
+    assert "inc-9" in caplog.text
