@@ -161,3 +161,49 @@ def test_version_de_paquete_con_forma_de_ip_no_deberia_confundir_al_modelo_sin_c
 
 def test_numero_de_puerto_solo_no_se_redacta_como_ip():
     assert sanitize("puerto 8080 abierto") == "puerto 8080 abierto"
+
+
+# ------------------------------------------------- credenciales dentro de URIs
+# Fuga encontrada al ejecutar el Gate C contra evidencia real de beetle-vps: la
+# IP del host se enmascaraba y la contraseña seguía en claro.
+
+
+def test_contrasena_en_uri_de_postgres_se_redacta():
+    resultado = sanitize("connecting to postgresql://app:cambia_esto@10.0.0.85:5432/cargatest")
+    assert "cambia_esto" not in resultado
+    # El esquema y el usuario sí se conservan: son diagnósticos.
+    assert "postgresql://app:[REDACTADO]@" in resultado
+
+
+def test_contrasena_en_uri_se_redacta_para_cualquier_esquema():
+    for esquema in ("redis", "amqp", "mongodb", "https"):
+        resultado = sanitize(f"fallo en {esquema}://usuario:hunter2@servidor/recurso")
+        assert "hunter2" not in resultado, esquema
+
+
+def test_uri_sin_credenciales_no_se_toca():
+    # Sin "@" no hay credencial: el puerto no debe confundirse con una contraseña.
+    texto = "upstream http://localhost:8080/salud respondió 502"
+    assert "[REDACTADO]" not in sanitize(texto)
+
+
+def test_uri_con_usuario_pero_sin_contrasena_no_se_rompe():
+    texto = "conectando a ftp://anonimo@archivos.local/pub"
+    assert sanitize(texto) == texto
+
+
+# --------------------------------------------------------------- Basic auth
+
+
+def test_cabecera_basic_se_redacta():
+    # Basic transporta usuario:contraseña en base64; era tan sensible como
+    # Bearer y pasaba sin tocar.
+    resultado = sanitize("Authorization: Basic YWRtaW46c3VwZXJzZWNyZXRv")
+    assert "YWRtaW46c3VwZXJzZWNyZXRv" not in resultado
+    assert "Basic [REDACTADO]" in resultado
+
+
+def test_palabra_basic_suelta_no_se_redacta():
+    # No sobre-redacción: "basic" en prosa no es una cabecera de autorización.
+    texto = "se aplicó la configuración basic del servicio"
+    assert sanitize(texto) == texto

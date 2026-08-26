@@ -91,15 +91,36 @@ def _redact_credential_assignments(text: str) -> str:
     return _ASSIGNMENT_RE.sub(_reemplazar, text)
 
 
+# ------------------------------------------------- credenciales dentro de URIs
+
+# "esquema://usuario:contrasena@host". Es la forma mas comun en que una
+# contrasena real llega al log: cadenas de conexion de PostgreSQL, Redis, AMQP o
+# HTTP con auth embebida. No la cubria ningun patron: _redact_ips enmascaraba el
+# host y dejaba la credencial intacta.
+#
+# Se conserva el esquema y el usuario porque son diagnosticos (que servicio y
+# que cuenta fallaron); solo se enmascara la contrasena. Exige "@" despues, asi
+# que "http://host:8080/ruta" no coincide y no hay sobre-redaccion de puertos.
+_URI_CREDENTIAL_RE = re.compile(r"([A-Za-z][A-Za-z0-9+.\-]*://)([^/\s:@]+):([^@\s/]+)@")
+
+
+def _redact_uri_credentials(text: str) -> str:
+    return _URI_CREDENTIAL_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}:[REDACTADO]@", text)
+
+
 # --------------------------------------------------------------- tokens Bearer/JWT
 
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9\-_.+/=]+")
+# Basic transporta "usuario:contrasena" en base64: tan sensible como Bearer,
+# y hasta ahora pasaba sin tocar.
+_BASIC_RE = re.compile(r"(?i)\bBasic\s+[A-Za-z0-9+/=]{8,}")
 # Tres segmentos base64url separados por ".", el formato de un JWT sin el
 # prefijo "Bearer " (p. ej. en una cookie o un cuerpo de log).
 _JWT_RE = re.compile(r"\b[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
 
 
 def _redact_tokens(text: str) -> str:
+    text = _BASIC_RE.sub("Basic [REDACTADO]", text)
     text = _BEARER_RE.sub("Bearer [TOKEN_REDACTADO]", text)
     text = _JWT_RE.sub("[TOKEN_REDACTADO]", text)
     return text
@@ -144,6 +165,7 @@ def sanitize(text: str) -> str:
     """
     resultado = _redact_ssh_keys(text)
     resultado = _redact_tokens(resultado)
+    resultado = _redact_uri_credentials(resultado)
     resultado = _redact_credential_assignments(resultado)
     resultado = _redact_home_paths(resultado)
     resultado = _redact_ips(resultado)
