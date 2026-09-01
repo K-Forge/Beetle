@@ -1,0 +1,48 @@
+# Deteccion en tiempo real: escucha el journal y avisa al agente por el FIFO.
+#
+# Unidad separada a proposito. Si el trigger muere, el monitor por polling
+# sigue vigilando; si el agente muere, systemd lo reinicia sin arrastrar al
+# trigger. Un solo proceso para ambas cosas convertiria cualquier fallo de uno
+# en ceguera total.
+
+[Unit]
+Description=Doctor J/K - trigger de journal en tiempo real
+Documentation=file:/opt/doctorjk/README.md
+
+# Requiere al agente porque sin el no existe el FIFO al que escribir, y
+# BindsTo hace que se detenga solo si el agente se detiene.
+BindsTo=doctorjk.service
+After=doctorjk.service
+
+[Service]
+Type=simple
+User=doctorjk
+Group=doctorjk
+
+WorkingDirectory=/opt/doctorjk
+ExecStart=/opt/doctorjk/doctorjk/trigger.sh
+
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+# Solo escribe en el FIFO, que vive en el RuntimeDirectory del agente.
+ReadWritePaths=/run/doctorjk
+
+SupplementaryGroups=systemd-journal
+
+MemoryMax=64M
+TasksMax=16
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=doctorjk-trigger
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,62 @@
+# Agente principal: vigila, detecta, diagnostica e informa (Modo 1 por defecto).
+#
+# Es el unico proceso de larga vida y el unico dueno del estado: mantiene una
+# sola instancia del detector, porque los contadores de persistencia y la
+# deduplicacion no pueden repartirse entre procesos efimeros.
+
+[Unit]
+Description=Doctor J/K - diagnosticador de servidores
+Documentation=file:/opt/doctorjk/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=doctorjk
+Group=doctorjk
+
+# El FIFO que escribe doctorjk-trigger. systemd crea /run/doctorjk con el dueno
+# correcto y lo borra al detener el servicio, asi que no queda basura en /run.
+RuntimeDirectory=doctorjk
+RuntimeDirectoryMode=0750
+
+WorkingDirectory=/opt/doctorjk
+EnvironmentFile=/etc/doctorjk/.env
+ExecStart=/opt/doctorjk/venv/bin/python -m doctorjk.main
+
+# El agente que vigila no puede ser el que se cae en silencio.
+Restart=always
+RestartSec=5
+
+# Endurecimiento. Cada linea esta elegida para no romper lo que el agente SI
+# necesita: leer el journal, ejecutar systemctl/df/free/ss y escribir informes.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+# ProtectSystem=strict deja todo el sistema en solo-lectura; estas son las dos
+# unicas rutas donde el agente escribe.
+ReadWritePaths=/var/lib/doctorjk
+
+# Sin esto no puede leer el journal, que es su fuente principal de evidencia.
+SupplementaryGroups=systemd-journal
+
+# Techo de memoria: el agente vigila un servidor con problemas, no debe ser el
+# que lo termine de tumbar.
+MemoryMax=256M
+TasksMax=64
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=doctorjk
+
+[Install]
+WantedBy=multi-user.target
