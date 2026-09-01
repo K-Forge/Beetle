@@ -40,6 +40,10 @@ step "Quitando el codigo"
 rm -rf "$PREFIX"
 info "$PREFIX eliminado"
 
+step "Quitando privilegios de Modo 2"
+rm -f /etc/sudoers.d/doctorjk
+info "sudoers de doctorjk eliminado"
+
 step "Configuracion y datos"
 if $DELETE_DATA; then
   rm -rf "$CONFIG_DIR" "$DATA_DIR"

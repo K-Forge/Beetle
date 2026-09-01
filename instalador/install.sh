@@ -97,6 +97,14 @@ install -m 0644 "$REPO/pyproject.toml" "$PREFIX/pyproject.toml"
 # `systemctl status` ofrece un enlace roto.
 install -m 0644 "$REPO/README.md" "$PREFIX/README.md"
 
+# Modo 2 (tareas #199-202): los cuatro scripts corren como root vía sudoers
+# exacto (paso 5), nunca con permisos del propio doctorjk.
+install -d -m 0755 "$PREFIX/scripts-fix"
+install -m 0755 "$REPO/scripts-fix/comun.sh" "$PREFIX/scripts-fix/comun.sh"
+for fix_script in fix_disco.sh fix_servicio.sh fix_memoria.sh fix_puerto.sh; do
+  install -m 0755 "$REPO/scripts-fix/$fix_script" "$PREFIX/scripts-fix/$fix_script"
+done
+
 if [[ -x "$PREFIX/venv/bin/python" ]]; then
   info "entorno virtual existente, se reutiliza"
 else
@@ -132,7 +140,32 @@ fi
 # Aunque ya existiera, se reafirma el modo: un .env legible por todos es una fuga.
 chmod 0600 "$CONFIG_DIR/.env"
 
-# --------------------------------------------------------------- 5. servicios
+# ---------------------------------------------------- 5. privilegios del Modo 2
+# doctorjk corre sin privilegios (CONTEXTO-IA.md §8.5); estos cuatro scripts
+# ya vetted son la ÚNICA escalación permitida, cada uno por su ruta exacta.
+# Nunca un systemctl/find suelto, nunca shell genérico (tareas #199-202,
+# plan-finalizacion-mvp.md §4.1).
+
+step "Instalando privilegios de Modo 2 (sudoers)"
+
+SUDOERS_TMP="$(mktemp)"
+trap 'rm -f "$SUDOERS_TMP"' EXIT
+cat > "$SUDOERS_TMP" <<SUDOERS_EOF
+# Generado por instalador/install.sh -- no editar a mano, se sobrescribe en
+# cada instalación. Cuatro rutas exactas, nada más.
+doctorjk ALL=(root) NOPASSWD: $PREFIX/scripts-fix/fix_disco.sh
+doctorjk ALL=(root) NOPASSWD: $PREFIX/scripts-fix/fix_servicio.sh
+doctorjk ALL=(root) NOPASSWD: $PREFIX/scripts-fix/fix_memoria.sh
+doctorjk ALL=(root) NOPASSWD: $PREFIX/scripts-fix/fix_puerto.sh
+SUDOERS_EOF
+
+visudo -cf "$SUDOERS_TMP" || fatal "el sudoers generado para Modo 2 no es válido, no se instala"
+install -m 0440 -o root -g root "$SUDOERS_TMP" /etc/sudoers.d/doctorjk
+rm -f "$SUDOERS_TMP"
+trap - EXIT
+info "sudoers instalado: 4 scripts exactos, sin shell genérico"
+
+# --------------------------------------------------------------- 6. servicios
 
 step "Instalando unidades de systemd"
 
@@ -162,7 +195,7 @@ if (( ${#failed_units[@]} > 0 )); then
   exit 1
 fi
 
-# ----------------------------------------------------------------- 6. resumen
+# ----------------------------------------------------------------- 7. resumen
 
 MODE=$(grep -E '^\s*modo_remediacion' "$CONFIG_DIR/config.toml" | head -1 | cut -d'"' -f2 || echo "desconocido")
 
