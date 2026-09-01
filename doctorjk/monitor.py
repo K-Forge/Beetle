@@ -56,7 +56,7 @@ def run_command(argv: Sequence[str], timeout_s: float) -> CommandResult:
     (comando ausente, tiempo agotado, código distinto de 0) se devuelven como
     CommandResult con success=False para que el llamador decida qué hacer."""
     try:
-        completado = subprocess.run(
+        completed = subprocess.run(
             list(argv),
             capture_output=True,
             text=True,
@@ -64,23 +64,23 @@ def run_command(argv: Sequence[str], timeout_s: float) -> CommandResult:
             check=False,
         )
     except FileNotFoundError:
-        mensaje = f"comando no encontrado: {argv[0]}"
-        logger.warning(mensaje)
-        return CommandResult(stdout="", success=False, error=mensaje)
+        message = f"comando no encontrado: {argv[0]}"
+        logger.warning(message)
+        return CommandResult(stdout="", success=False, error=message)
     except subprocess.TimeoutExpired:
-        mensaje = f"tiempo agotado tras {timeout_s}s ejecutando: {' '.join(argv)}"
-        logger.warning(mensaje)
-        return CommandResult(stdout="", success=False, error=mensaje)
+        message = f"tiempo agotado tras {timeout_s}s ejecutando: {' '.join(argv)}"
+        logger.warning(message)
+        return CommandResult(stdout="", success=False, error=message)
 
-    if completado.returncode != 0:
-        mensaje = (
-            f"{argv[0]} terminó con código {completado.returncode}: "
-            f"{completado.stderr.strip()}"
+    if completed.returncode != 0:
+        message = (
+            f"{argv[0]} terminó con código {completed.returncode}: "
+            f"{completed.stderr.strip()}"
         )
-        logger.warning(mensaje)
-        return CommandResult(stdout=completado.stdout, success=False, error=mensaje)
+        logger.warning(message)
+        return CommandResult(stdout=completed.stdout, success=False, error=message)
 
-    return CommandResult(stdout=completado.stdout, success=True, error=None)
+    return CommandResult(stdout=completed.stdout, success=True, error=None)
 
 
 def query_service_states(
@@ -101,7 +101,7 @@ def query_service_states(
     if not services:
         return {}
     try:
-        completado = subprocess.run(
+        completed = subprocess.run(
             ["systemctl", "is-active", *services],
             capture_output=True,
             text=True,
@@ -122,52 +122,52 @@ def query_service_states(
     # systemctl is-active imprime exactamente una línea por unidad pedida, en
     # el mismo orden -- incluida "unknown" para una unidad inexistente, que
     # se trata como inactiva y no como falla de adquisición.
-    lineas = completado.stdout.splitlines()
-    return {servicio: linea.strip() == "active" for servicio, linea in zip(services, lineas)}
+    lines = completed.stdout.splitlines()
+    return {service: line.strip() == "active" for service, line in zip(services, lines)}
 
 
 # --------------------------------------------------------------- parsers puros
 
 
 def parse_failed_services_output(stdout: str) -> tuple[FailedService, ...]:
-    servicios: list[FailedService] = []
-    for linea in stdout.splitlines():
-        linea = linea.strip()
-        if not linea:
+    services: list[FailedService] = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
             continue
-        columnas = linea.split()
-        servicios.append(FailedService(name=columnas[0]))
-    return tuple(servicios)
+        columns = line.split()
+        services.append(FailedService(name=columns[0]))
+    return tuple(services)
 
 
 def parse_disk_output(stdout: str) -> tuple[DiskUsage, ...]:
-    discos: list[DiskUsage] = []
+    disks: list[DiskUsage] = []
     # La primera línea es el encabezado de df ("Filesystem Use% Mounted on").
-    for linea in stdout.splitlines()[1:]:
-        columnas = linea.split()
-        if len(columnas) < 3:
+    for line in stdout.splitlines()[1:]:
+        columns = line.split()
+        if len(columns) < 3:
             continue
         try:
-            porcentaje = int(columnas[1].rstrip("%"))
+            percentage = int(columns[1].rstrip("%"))
         except ValueError:
             continue
-        discos.append(
-            DiskUsage(source=columnas[0], usage_percent=porcentaje, target=columnas[2])
+        disks.append(
+            DiskUsage(source=columns[0], usage_percent=percentage, target=columns[2])
         )
-    return tuple(discos)
+    return tuple(disks)
 
 
 def parse_memory_output(stdout: str) -> MemoryUsage | None:
-    for linea in stdout.splitlines():
-        if not linea.startswith("Mem:"):
+    for line in stdout.splitlines():
+        if not line.startswith("Mem:"):
             continue
-        columnas = linea.split()
+        columns = line.split()
         try:
             return MemoryUsage(
-                total_mb=int(columnas[1]),
-                used_mb=int(columnas[2]),
-                free_mb=int(columnas[3]),
-                available_mb=int(columnas[6]),
+                total_mb=int(columns[1]),
+                used_mb=int(columns[2]),
+                free_mb=int(columns[3]),
+                available_mb=int(columns[6]),
             )
         except (IndexError, ValueError):
             # free sin columna "available" (procps viejo) u otra salida
@@ -177,33 +177,33 @@ def parse_memory_output(stdout: str) -> MemoryUsage | None:
 
 
 def parse_ports_output(stdout: str) -> tuple[ListeningPort, ...]:
-    puertos: list[ListeningPort] = []
+    ports: list[ListeningPort] = []
     # La primera línea es el encabezado de ss ("State Recv-Q Send-Q ...").
-    for linea in stdout.splitlines()[1:]:
-        columnas = linea.split()
-        if len(columnas) < 4:
+    for line in stdout.splitlines()[1:]:
+        columns = line.split()
+        if len(columns) < 4:
             continue
-        direccion_local = columnas[3]
+        local_address = columns[3]
         try:
-            host, puerto = direccion_local.rsplit(":", 1)
-            puertos.append(ListeningPort(address=host, port=int(puerto)))
+            host, port = local_address.rsplit(":", 1)
+            ports.append(ListeningPort(address=host, port=int(port)))
         except ValueError:
             continue
-    return tuple(puertos)
+    return tuple(ports)
 
 
 def parse_load_output(stdout: str) -> LoadAverage | None:
     if "load average:" not in stdout:
         return None
-    cola = stdout.split("load average:", 1)[1].strip()
-    valores = [v.strip() for v in cola.split(",")]
-    if len(valores) != 3:
+    tail = stdout.split("load average:", 1)[1].strip()
+    values = [v.strip() for v in tail.split(",")]
+    if len(values) != 3:
         return None
     try:
         return LoadAverage(
-            load_1m=float(valores[0]),
-            load_5m=float(valores[1]),
-            load_15m=float(valores[2]),
+            load_1m=float(values[0]),
+            load_5m=float(values[1]),
+            load_15m=float(values[2]),
         )
     except ValueError:
         return None
@@ -225,48 +225,48 @@ def take_snapshot(
     recuperó, porque `systemctl --failed` simplemente deja de mencionarlo
     (plan-finalizacion-mvp.md Gate 1.3, defecto 1).
     """
-    servicios = run_command(
+    services_result = run_command(
         ["systemctl", "list-units", "--failed", "--no-legend", "--plain", "--no-pager"],
         timeout_s,
     )
-    disco = run_command(["df", "-h", "--output=source,pcent,target"], timeout_s)
-    memoria = run_command(["free", "-m"], timeout_s)
-    puertos = run_command(["ss", "-tlnp"], timeout_s)
-    carga = run_command(["uptime"], timeout_s)
+    disk_result = run_command(["df", "-h", "--output=source,pcent,target"], timeout_s)
+    memory_result = run_command(["free", "-m"], timeout_s)
+    ports_result = run_command(["ss", "-tlnp"], timeout_s)
+    load_result = run_command(["uptime"], timeout_s)
 
-    memoria_parseada = parse_memory_output(memoria.stdout) if memoria.success else None
-    carga_parseada = parse_load_output(carga.stdout) if carga.success else None
+    parsed_memory = parse_memory_output(memory_result.stdout) if memory_result.success else None
+    parsed_load = parse_load_output(load_result.stdout) if load_result.success else None
 
     if monitored_services:
-        estados = query_service_states(sorted(monitored_services), timeout_s)
-        estados_disponibles = estados is not None
-        estados_tupla = (
-            tuple(ServiceState(name=nombre, active=activo) for nombre, activo in estados.items())
-            if estados is not None
+        states = query_service_states(sorted(monitored_services), timeout_s)
+        states_available = states is not None
+        states_tuple = (
+            tuple(ServiceState(name=name, active=active) for name, active in states.items())
+            if states is not None
             else ()
         )
     else:
         # Nada vigilado explícitamente: no es una falla de adquisición, es
         # que no se pidió nada.
-        estados_disponibles = True
-        estados_tupla = ()
+        states_available = True
+        states_tuple = ()
 
     return SystemSnapshot(
         captured_at=datetime.now(timezone.utc),
         failed_services=(
-            parse_failed_services_output(servicios.stdout) if servicios.success else ()
+            parse_failed_services_output(services_result.stdout) if services_result.success else ()
         ),
-        services_available=servicios.success,
-        disks=parse_disk_output(disco.stdout) if disco.success else (),
-        disk_available=disco.success,
-        memory=memoria_parseada,
-        memory_available=memoria.success and memoria_parseada is not None,
-        ports=parse_ports_output(puertos.stdout) if puertos.success else (),
-        ports_available=puertos.success,
-        load=carga_parseada,
-        load_available=carga.success and carga_parseada is not None,
-        service_states=estados_tupla,
-        service_states_available=estados_disponibles,
+        services_available=services_result.success,
+        disks=parse_disk_output(disk_result.stdout) if disk_result.success else (),
+        disk_available=disk_result.success,
+        memory=parsed_memory,
+        memory_available=memory_result.success and parsed_memory is not None,
+        ports=parse_ports_output(ports_result.stdout) if ports_result.success else (),
+        ports_available=ports_result.success,
+        load=parsed_load,
+        load_available=load_result.success and parsed_load is not None,
+        service_states=states_tuple,
+        service_states_available=states_available,
     )
 
 
@@ -287,8 +287,8 @@ def normalize_snapshot(
     para que el detector (Fase 2) no confunda un fallo de adquisición con un
     recurso saludable.
     """
-    señales: list[Signal] = []
-    marca_de_tiempo = snapshot.captured_at
+    signals: list[Signal] = []
+    timestamp = snapshot.captured_at
 
     # Servicios vigilados explícitamente (config.servicios_vigilados): se
     # emite una señal por cada uno, sano o cruzado, en todos los ciclos. A
@@ -297,37 +297,37 @@ def normalize_snapshot(
     # cada unidad de la lista, así que el detector se entera igual cuando el
     # servicio vuelve a estar activo (plan-finalizacion-mvp.md defecto 1).
     if snapshot.service_states_available:
-        for estado in snapshot.service_states:
-            señales.append(
+        for service_state in snapshot.service_states:
+            signals.append(
                 Signal(
-                    timestamp=marca_de_tiempo,
+                    timestamp=timestamp,
                     signal_type=SignalType.SERVICE_FAILED,
-                    value="active" if estado.active else "inactive",
+                    value="active" if service_state.active else "inactive",
                     threshold="active",
-                    crossed=not estado.active,
-                    key=f"service:{estado.name}",
+                    crossed=not service_state.active,
+                    key=f"service:{service_state.name}",
                 )
             )
 
     # Disco: una señal por punto de montaje, cruzada o no según el umbral.
     if snapshot.disk_available:
-        for disco_leido in snapshot.disks:
-            señales.append(
+        for disk_reading in snapshot.disks:
+            signals.append(
                 Signal(
-                    timestamp=marca_de_tiempo,
+                    timestamp=timestamp,
                     signal_type=SignalType.DISK_FULL,
-                    value=str(disco_leido.usage_percent),
+                    value=str(disk_reading.usage_percent),
                     threshold=str(disk_pct_threshold),
-                    crossed=disco_leido.usage_percent > disk_pct_threshold,
-                    key=f"disk:{disco_leido.target}",
+                    crossed=disk_reading.usage_percent > disk_pct_threshold,
+                    key=f"disk:{disk_reading.target}",
                 )
             )
 
     # Memoria: una sola señal global, no hay "por recurso" que distinguir.
     if snapshot.memory_available and snapshot.memory is not None:
-        señales.append(
+        signals.append(
             Signal(
-                timestamp=marca_de_tiempo,
+                timestamp=timestamp,
                 signal_type=SignalType.MEMORY_LOW,
                 value=str(snapshot.memory.available_mb),
                 threshold=str(memory_available_mb_threshold),
@@ -347,31 +347,31 @@ def normalize_snapshot(
     # debía. Sin estado del servicio esperado (no vigilado, o consulta no
     # disponible) no hay base para declarar ocupación indebida: queda sano.
     if snapshot.ports_available:
-        puertos_escuchando = {p.port for p in snapshot.ports}
-        estado_por_servicio = {e.name: e.active for e in snapshot.service_states}
-        for vigilado in monitored_ports:
-            escuchando = vigilado.port in puertos_escuchando
-            señales.append(
+        listening_ports = {p.port for p in snapshot.ports}
+        service_active_by_name = {e.name: e.active for e in snapshot.service_states}
+        for monitored in monitored_ports:
+            listening = monitored.port in listening_ports
+            signals.append(
                 Signal(
-                    timestamp=marca_de_tiempo,
+                    timestamp=timestamp,
                     signal_type=SignalType.PORT_DOWN,
-                    value="listening" if escuchando else "down",
+                    value="listening" if listening else "down",
                     threshold="listening",
-                    crossed=not escuchando,
-                    key=f"port:{vigilado.port}:down",
+                    crossed=not listening,
+                    key=f"port:{monitored.port}:down",
                 )
             )
 
-            servicio_activo = estado_por_servicio.get(vigilado.service)
-            ocupado_indebidamente = escuchando and servicio_activo is False
-            señales.append(
+            service_active = service_active_by_name.get(monitored.service)
+            wrongly_occupied = listening and service_active is False
+            signals.append(
                 Signal(
-                    timestamp=marca_de_tiempo,
+                    timestamp=timestamp,
                     signal_type=SignalType.PORT_OCCUPIED,
-                    value="occupied_by_other" if ocupado_indebidamente else "owned_or_free",
+                    value="occupied_by_other" if wrongly_occupied else "owned_or_free",
                     threshold="owned_or_free",
-                    crossed=ocupado_indebidamente,
-                    key=f"port:{vigilado.port}:occupied",
+                    crossed=wrongly_occupied,
+                    key=f"port:{monitored.port}:occupied",
                 )
             )
 
@@ -379,4 +379,4 @@ def normalize_snapshot(
     # snapshot.load sigue disponible para logging mientras no exista un
     # criterio de incidente aprobado para ella.
 
-    return tuple(señales)
+    return tuple(signals)
