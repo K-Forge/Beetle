@@ -1038,16 +1038,68 @@ BindPaths=/var/tmp/doctorjk-gate4-varlog:/var/log
 BindPaths=/var/tmp/doctorjk-gate4-runlog-journal:/run/log/journal
 ```
 
+**Por qué el manifest NO es "todo `/var/log`" (corrección propia, antes de
+correr nada):** un manifest de TODOS los archivos bajo `/var/log`
+(path+tamaño+mtime, como una versión anterior de este bloque proponía)
+daría **falso positivo garantizado** -- `/var/log/nginx/access.log`,
+`/var/log/auth.log` y cualquier log activo siguen creciendo solos durante
+la ventana de la prueba, con o sin `fix_disco.sh` de por medio. Comparar
+esos archivos "antes/después" siempre muestra diferencia, aunque no haya
+pasado nada malo. El manifest correcto es del **conjunto realmente
+destructible** -- lo que `fix_disco.sh` o `journalctl --vacuum-size`
+podrían borrar de verdad -- y dos conjuntos, no uno:
+
+- **Manifest A -- candidatos reales de `fix_disco.sh`:** el mismo patrón
+  exacto que usa el script (`*.log.*.gz` o `*.log.[0-9]*`, `-mtime +3`).
+  Al ser logs ya rotados y sin tocar hace más de 3 días, su contenido NO
+  debería cambiar en la ventana de la prueba -- un `sha256` por archivo es
+  seguro acá, sin riesgo de falso positivo por crecimiento natural.
+- **Manifest B -- journals ARCHIVADOS, no el activo:** investigado antes
+  de diseñar esto, no asumido -- la documentación oficial de `journalctl`
+  (`man journalctl`, sección `--vacuum-size=`/`--vacuum-time=`/
+  `--vacuum-files=`, [manpages.ubuntu.com/noble](https://manpages.ubuntu.com/manpages/noble/en/man1/journalctl.1.html),
+  espejo de la documentación upstream de freedesktop.org/systemd) dice
+  explícitamente: *"the vacuuming operation only operates on archived
+  journal files"* y que `--vacuum-files=` *"will not remove active journal
+  files"* -- el vaciado NUNCA toca el archivo activo. La convención de
+  nombres que distingue uno de otro está documentada en
+  `systemd-journald.service(8)` ([manpages.ubuntu.com/noble](https://manpages.ubuntu.com/manpages/noble/en/man8/systemd-journald.service.8.html)):
+  al rotar, systemd-journald renombra el archivo activo a
+  `ORIGINAL@SUFIJO.journal` (archivado, limpio); si el daemon se detuvo
+  sin limpieza o el archivo está corrupto, el sufijo es `.journal~` (con o
+  sin `@` de por medio). El archivo activo (`system.journal`,
+  `user-<uid>.journal`, sin `@` ni `~`) nunca se renombra así --
+  identificable por exclusión. Patrón para el `find`:
+  `-name '*@*.journal' -o -name '*.journal~'`.
+- **Capa extra, no el gate principal -- listado de rutas de TODO journal
+  del host, activos incluidos:** por si la identificación de archivados
+  de arriba fallara en este VPS puntual (versión de systemd distinta,
+  convención inesperada), se guarda además un listado de **rutas**
+  (nunca contenido/hash, para no volver a caer en el falso positivo del
+  crecimiento natural) de absolutamente todo archivo bajo
+  `/var/log/journal` y `/run/log/journal`. La única pregunta que este
+  listado responde es "¿desapareció algún archivo que existía antes?" --
+  un archivo activo que cambió de tamaño no cuenta como divergencia, uno
+  que dejó de existir sí.
+
 Preparación:
 
 ```bash
 tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
-  # Manifest ANTES -- referencia para confirmar en la Fase E que el
-  # /var/log real del host no cambió ni un byte durante toda la ventana
-  # aislada.
-  sudo find /var/log -type f -printf '%p %s %T@\n' | sort | sha256sum \
-    > /tmp/doctorjk-varlog-manifest-antes.sha256
-  cat /tmp/doctorjk-varlog-manifest-antes.sha256
+  # Manifest A: candidatos REALES de fix_disco.sh.
+  sudo find /var/log -type f \( -name '*.log.*.gz' -o -name '*.log.[0-9]*' \) -mtime +3 -print0 \
+    | sort -z | xargs -0 -r sha256sum > /tmp/doctorjk-candidatos-antes.sha256
+  wc -l /tmp/doctorjk-candidatos-antes.sha256
+
+  # Manifest B: journals ARCHIVADOS únicamente (nunca el activo -- ver nota arriba).
+  sudo find /var/log/journal /run/log/journal -type f \( -name '*@*.journal' -o -name '*.journal~' \) 2>/dev/null \
+    | sort | xargs -r sha256sum > /tmp/doctorjk-journal-archivado-antes.sha256
+  wc -l /tmp/doctorjk-journal-archivado-antes.sha256
+
+  # Capa extra: rutas de TODO journal, activos incluidos -- solo para
+  # detectar si alguno DESAPARECE, nunca para detectar cambio de tamaño.
+  sudo find /var/log/journal /run/log/journal -type f 2>/dev/null | sort \
+    > /tmp/doctorjk-journal-rutas-antes.txt
 
   sudo mkdir -p /var/tmp/doctorjk-gate4-varlog /var/tmp/doctorjk-gate4-runlog-journal
   # Decoy: un log activo, sin sufijo de rotación, que fix_disco.sh NUNCA
@@ -1083,12 +1135,22 @@ tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
   sudo nsenter --mount=/proc/\$pid/ns/mnt -- ls -la /var/log
   sudo nsenter --mount=/proc/\$pid/ns/mnt -- ls -la /run/log/journal 2>&1
 
+  echo '--- prueba real de escritura+borrado (confirma que BindPaths + el ReadWritePaths=/var/log ya existente permiten la postcondición, no solo la visibilidad) ---'
+  sudo nsenter --mount=/proc/\$pid/ns/mnt -- sh -c 'echo centinela > /var/log/doctorjk-gate4-centinela.txt'
+  echo '  debe aparecer en el directorio de prueba del host:'
+  ls /var/tmp/doctorjk-gate4-varlog/doctorjk-gate4-centinela.txt
+  echo '  NO debe aparecer jamás en /var/log real del host:'
+  ls /var/log/doctorjk-gate4-centinela.txt 2>&1
+  sudo nsenter --mount=/proc/\$pid/ns/mnt -- rm -f /var/log/doctorjk-gate4-centinela.txt
+  echo '  tras borrar desde el namespace, debe desaparecer también del directorio de prueba:'
+  ls /var/tmp/doctorjk-gate4-varlog/doctorjk-gate4-centinela.txt 2>&1
+
   echo '--- df / sigue midiendo la raiz real (no debe moverse por el bind) ---'
   df -h /
 "
 ```
 
-Criterio de aprobación, los tres a la vez:
+Criterio de aprobación, los cuatro a la vez:
 
 1. `systemd-analyze verify` no reporta error sobre el drop-in.
 2. `ls /var/log` desde el namespace muestra **solo** `app.log` (el decoy)
@@ -1096,13 +1158,20 @@ Criterio de aprobación, los tres a la vez:
    Lo mismo para `/run/log/journal` (vacío, o solo lo que el propio
    journald del namespace haya podido crear ahí -- nunca los directorios
    de machine-id reales del host).
-3. `df -h /` coincide con la línea base de §9.1 -- confirma que el bind no
+3. **El centinela** aparece únicamente en
+   `/var/tmp/doctorjk-gate4-varlog/` (nunca en `/var/log` real) y, tras
+   borrarlo desde el namespace, desaparece también del directorio de
+   prueba -- confirma escritura Y borrado dentro del bind, no solo
+   lectura, que es justo lo que `fix_disco.sh` necesita hacer de verdad
+   con el filler.
+4. `df -h /` coincide con la línea base de §9.1 -- confirma que el bind no
    movió la medición de la raíz.
 
-Si el punto 2 muestra cualquier archivo que no sea el decoy, o si
-`/run/log/journal` no existe como destino de bind válido y systemd lo
-reporta como error de montaje: **parar, no autorizar la ejecución real de
-`fix_disco.sh`, no inventar un mecanismo alternativo en el momento.**
+Si el punto 2 muestra cualquier archivo que no sea el decoy, si el punto 3
+falla en cualquiera de sus dos partes, o si `/run/log/journal` no existe
+como destino de bind válido y systemd lo reporta como error de montaje:
+**parar, no autorizar la ejecución real de `fix_disco.sh`, no inventar un
+mecanismo alternativo en el momento.**
 
 El filler real de la Fase C (b) se crea dentro de
 `/var/tmp/doctorjk-gate4-varlog/`, nunca directo en `/var/log` -- el
@@ -1123,20 +1192,44 @@ tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
   sudo systemctl restart doctorjk.service
   sudo rm -rf /var/tmp/doctorjk-gate4-varlog /var/tmp/doctorjk-gate4-runlog-journal
 
-  sudo find /var/log -type f -printf '%p %s %T@\n' | sort | sha256sum \
-    > /tmp/doctorjk-varlog-manifest-despues.sha256
-  diff /tmp/doctorjk-varlog-manifest-antes.sha256 /tmp/doctorjk-varlog-manifest-despues.sha256 \
-    && echo 'MANIFEST IDÉNTICO: /var/log real intacto' \
-    || echo 'DIVERGENCIA: PARAR -- no seguir con (c) hasta entenderla'
-  sudo rm -f /tmp/doctorjk-varlog-manifest-antes.sha256 /tmp/doctorjk-varlog-manifest-despues.sha256
+  sudo find /var/log -type f \( -name '*.log.*.gz' -o -name '*.log.[0-9]*' \) -mtime +3 -print0 \
+    | sort -z | xargs -0 -r sha256sum > /tmp/doctorjk-candidatos-despues.sha256
+  diff /tmp/doctorjk-candidatos-antes.sha256 /tmp/doctorjk-candidatos-despues.sha256 \
+    && echo 'CANDIDATOS REALES IDÉNTICOS: nada se tocó' \
+    || echo 'DIVERGENCIA EN CANDIDATOS REALES: PARAR -- no seguir con (c)'
+
+  sudo find /var/log/journal /run/log/journal -type f \( -name '*@*.journal' -o -name '*.journal~' \) 2>/dev/null \
+    | sort | xargs -r sha256sum > /tmp/doctorjk-journal-archivado-despues.sha256
+  diff /tmp/doctorjk-journal-archivado-antes.sha256 /tmp/doctorjk-journal-archivado-despues.sha256 \
+    && echo 'JOURNAL ARCHIVADO IDÉNTICO: nada se tocó' \
+    || echo 'DIVERGENCIA EN JOURNAL ARCHIVADO: PARAR -- no seguir con (c)'
+
+  sudo find /var/log/journal /run/log/journal -type f 2>/dev/null | sort \
+    > /tmp/doctorjk-journal-rutas-despues.txt
+  desaparecidos=\$(comm -23 /tmp/doctorjk-journal-rutas-antes.txt /tmp/doctorjk-journal-rutas-despues.txt)
+  if [[ -n \"\$desaparecidos\" ]]; then
+    echo 'ARCHIVOS DE JOURNAL DESAPARECIDOS (capa extra, activos incluidos): PARAR'
+    echo \"\$desaparecidos\"
+  else
+    echo 'sin journals desaparecidos (activos incluidos)'
+  fi
+
+  sudo rm -f /tmp/doctorjk-candidatos-antes.sha256 /tmp/doctorjk-candidatos-despues.sha256 \
+    /tmp/doctorjk-journal-archivado-antes.sha256 /tmp/doctorjk-journal-archivado-despues.sha256 \
+    /tmp/doctorjk-journal-rutas-antes.txt /tmp/doctorjk-journal-rutas-despues.txt
 "
 ```
 
+Un `diff` con salida en cualquiera de los dos manifests sha256, o
+cualquier ruta reportada como desaparecida en el listado de journals, es
+una divergencia real -- pararse ahí y no seguir con (c) hasta entenderla,
+igual que cualquier otro chequeo de salud de este protocolo.
+
 Verificar antes de seguir con (c): `sudo ls /var/log | head` muestra los
 directorios reales del host (`nginx`, `postgresql`, etc.), no el decoy --
-confirma que la vista real volvió, y el manifest de arriba dio idéntico.
-Si el escenario (b) se saltó por no
-haber aprobado el gate, este bloque no hace falta (nada quedó montado).
+confirma que la vista real volvió, y los tres chequeos de arriba dieron
+limpio. Si el escenario (b) se saltó por no haber aprobado el gate, este
+bloque no hace falta (nada quedó montado, ni hay manifests que comparar).
 
 #### 9.2.4 Fase C — 4 escenarios reales, secuenciales (`dry_run=false`, `auto_fix=true`)
 
@@ -1366,13 +1459,21 @@ paso, dejando el manifest "antes" sin comparar:
 
 ```bash
 tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
-  if [[ -f /tmp/doctorjk-varlog-manifest-antes.sha256 ]]; then
-    sudo find /var/log -type f -printf '%p %s %T@\n' | sort | sha256sum \
-      > /tmp/doctorjk-varlog-manifest-despues.sha256
-    diff /tmp/doctorjk-varlog-manifest-antes.sha256 /tmp/doctorjk-varlog-manifest-despues.sha256 \
-      && echo 'MANIFEST IDÉNTICO: /var/log real intacto' \
-      || echo 'DIVERGENCIA: revisar antes de continuar'
-    sudo rm -f /tmp/doctorjk-varlog-manifest-antes.sha256 /tmp/doctorjk-varlog-manifest-despues.sha256
+  if [[ -f /tmp/doctorjk-candidatos-antes.sha256 ]]; then
+    sudo find /var/log -type f \( -name '*.log.*.gz' -o -name '*.log.[0-9]*' \) -mtime +3 -print0 \
+      | sort -z | xargs -0 -r sha256sum > /tmp/doctorjk-candidatos-despues.sha256
+    diff /tmp/doctorjk-candidatos-antes.sha256 /tmp/doctorjk-candidatos-despues.sha256 \
+      && echo 'CANDIDATOS REALES IDÉNTICOS' || echo 'DIVERGENCIA EN CANDIDATOS: revisar antes de continuar'
+    sudo find /var/log/journal /run/log/journal -type f \( -name '*@*.journal' -o -name '*.journal~' \) 2>/dev/null \
+      | sort | xargs -r sha256sum > /tmp/doctorjk-journal-archivado-despues.sha256
+    diff /tmp/doctorjk-journal-archivado-antes.sha256 /tmp/doctorjk-journal-archivado-despues.sha256 \
+      && echo 'JOURNAL ARCHIVADO IDÉNTICO' || echo 'DIVERGENCIA EN JOURNAL: revisar antes de continuar'
+    sudo find /var/log/journal /run/log/journal -type f 2>/dev/null | sort \
+      > /tmp/doctorjk-journal-rutas-despues.txt
+    comm -23 /tmp/doctorjk-journal-rutas-antes.txt /tmp/doctorjk-journal-rutas-despues.txt
+    sudo rm -f /tmp/doctorjk-candidatos-antes.sha256 /tmp/doctorjk-candidatos-despues.sha256 \
+      /tmp/doctorjk-journal-archivado-antes.sha256 /tmp/doctorjk-journal-archivado-despues.sha256 \
+      /tmp/doctorjk-journal-rutas-antes.txt /tmp/doctorjk-journal-rutas-despues.txt
   else
     echo 'sin manifest pendiente -- ya se verificó en el escenario (b), o el aislamiento nunca se usó en este intento'
   fi
@@ -1728,9 +1829,20 @@ VPS:**
    `recolector.py` llama `journalctl` para CUALQUIER incidente, así que
    dejar el aislamiento montado durante toda la Fase C habría roto la
    evidencia de los otros tres escenarios) -- se monta, se verifica, se
-   usa y se retira dentro del propio sub-paso (b), con manifest hash de
-   `/var/log` real antes/después verificado ahí mismo (fail fast), no
-   diferido a la Fase E.
+   usa y se retira dentro del propio sub-paso (b), con manifest verificado
+   ahí mismo (fail fast), no diferido a la Fase E. El manifest en sí se
+   corrigió dos veces en revisión antes de ejecutar nada: la primera
+   versión comparaba TODO `/var/log` y habría dado falso positivo
+   garantizado (los logs activos crecen solos en la ventana de la
+   prueba); la versión final compara solo el conjunto realmente
+   destructible -- candidatos reales de `fix_disco.sh` (mismo patrón que
+   el script) y journals ARCHIVADOS (identificados por `@`/`.journal~`
+   en el nombre, documentado contra `man journalctl` y
+   `systemd-journald.service(8)`, nunca el activo), más una capa extra de
+   solo-rutas de todo journal como red de seguridad. El gate `nsenter`
+   ahora también escribe y borra un centinela real dentro del bind, no
+   solo lista archivos -- confirma la postcondición de escritura que
+   `fix_disco.sh` necesita, no solo la visibilidad.
 
 **Pendiente antes de un cuarto intento:** ninguno de los dos mecanismos
 nuevos (unidades reales efímeras, aislamiento de `/var/log`/journal) se
