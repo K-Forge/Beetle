@@ -182,13 +182,34 @@ Hay que matar el proceso. Está documentado en el comentario de #172 y en Gate
 
 ## 7. Infraestructura del VPS
 
-- **Gate B sigue corriendo** desde `/opt/gate-b` (PIDs del agente y del
-  trigger), verificado por Tailscale el 2026-08-31. Debe detenerse con SIGTERM
-  por PID exacto (no por patrón amplio), archivarse como corrida inválida y
-  solo entonces limpiarse `/opt/gate-b` — ver Gate 0.2 del plan de finalización.
+### 7.1 Gate B — detenida y archivada como `INVALIDA_SIN_DETECTOR` (2026-09-01)
+
+Ejecutada siguiendo el protocolo de Gate 0.2 del plan de finalización, por
+Tailscale, como usuario `beetle` (con sudo):
+
+| Campo | Valor |
+|---|---|
+| Inicio | 2026-08-26T04:41:03Z (PID 80708, monitor) / 04:41:07Z (PID 80712, trigger) |
+| Fin | 2026-09-01T05:12Z |
+| Duración real | ~6 días (muy por encima de las 24 h previstas del gate) |
+| Muestras | 17.325 líneas en `/opt/gate-b/gate-b.log` (2,2 MB) |
+| Transiciones/incidentes | **0** — `grep -ci 'incident\|transition'` no encontró ninguna |
+| Código usado | copia de `gate-d/modo-1` al 2026-08-26, sin Detector cableado en `main.py` |
+| Terminación | SIGTERM al trigger primero, luego al monitor; ambos confirmados terminados |
+
+Como ya decía la auditoría: cada una de esas 17.325 líneas es
+`muestra tomada: ...` del callback `log_snapshot` de Gate A, nunca se
+instanció el Detector. **No cuenta como validación de #174–#178** ni sirve
+para calcular falsos positivos. `/opt/gate-b` se conserva sin borrar hasta
+que el resumen de arriba quede versionado (ya lo está, en este commit); la
+limpieza del directorio queda pendiente de aprobación explícita.
+
+### 7.2 Estado general
+
 - No existen `/opt/doctorjk`, `/etc/doctorjk` ni `/var/lib/doctorjk`: el
-  Modo 1 nunca se instaló de verdad en el VPS.
+  Modo 1 todavía no se instaló de verdad en el VPS — es el siguiente paso
+  (Gate 3.2).
 - Snapshot vigente: `beetle-vps-2026-08-19-1641`, 1 de 5 del cupo gratuito.
-- El despliegue automático solo sigue `main`; mientras esto viva en una rama,
-  el VPS se queda en la última versión de `main` (`6166bf9`), que solo tiene
-  el trigger original.
+- El despliegue automático solo sigue `main`; mientras el Modo 1 viva en
+  `mvp/integracion-modo-1`, el VPS no lo recibe por ese camino y hay que
+  instalarlo a mano (`instalador/install.sh`) para Gate 3.
