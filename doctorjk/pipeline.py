@@ -81,7 +81,12 @@ def handle_incident(
             "incidente %s diagnosticado sin modelo (fallback local)", incident.incident_id
         )
 
-    destino = deps.save_report(diagnostico, incident, reports_dir, now)
+    try:
+        destino = deps.save_report(diagnostico, incident, reports_dir, now)
+    except OSError as error:
+        log.error("no pude escribir el informe de %s: %s", incident.incident_id, error)
+        return None
+
     if destino is not None:
         log.info("informe escrito en %s", destino.name)
     return destino

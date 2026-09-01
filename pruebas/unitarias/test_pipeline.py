@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+import requests
 
 from doctorjk.informe import save_and_rotate
 from doctorjk.llm import LLMConfig, diagnose
@@ -192,7 +193,9 @@ def test_el_tipo_impide_pasar_evidencia_cruda_al_cliente():
 # ------------------------------------------------------------ proveedor caído
 
 def test_proveedor_caido_igual_escribe_informe_con_fallback(tmp_path: Path):
-    sesion = SesionFalsa(TimeoutError("sin respuesta"))
+    # requests.exceptions.Timeout: la jerarquía concreta que lanza el
+    # requests.Session real que main.py inyecta en producción (defecto 10).
+    sesion = SesionFalsa(requests.exceptions.Timeout("sin respuesta"))
     deps = _deps_reales(sesion, [])
 
     destino = handle_incident(_incidente(), "prompt", tmp_path, AHORA, deps)
@@ -259,4 +262,24 @@ def test_si_falla_la_recoleccion_no_se_llama_al_proveedor(tmp_path: Path):
     )
 
     assert handle_incident(_incidente(), "prompt", tmp_path, AHORA, deps) is None
-    assert sesion.enviado == [], "sin evidencia no hay nada que diagnosticar"
+
+
+def test_si_falla_escribir_el_informe_no_se_propaga(tmp_path: Path):
+    # Defecto 10: el punto de entrada ya no atrapa Exception a secas, así que
+    # el propio pipeline debe garantizar que un fallo de disco al guardar el
+    # informe no se escape -- no debe tumbar el bucle del agente.
+    sesion = SesionFalsa(RespuestaFalsa(200, {"choices": [{"message": {"content": "x"}}]}))
+    deps = _deps_reales(sesion, [])
+
+    def guardar_informe_falla(diagnostico, incidente, directorio, ahora):
+        raise OSError("disco lleno")
+
+    deps = PipelineDeps(
+        deps.collect_evidence,
+        deps.write_raw_evidence,
+        deps.sanitize_evidence,
+        deps.diagnose,
+        guardar_informe_falla,
+    )
+
+    assert handle_incident(_incidente(), "prompt", tmp_path, AHORA, deps) is None

@@ -9,11 +9,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+import requests
 
 from doctorjk.llm import (
     BACKOFF_SECONDS,
     LLMConfig,
-    LLMConfigError,
     build_fallback,
     diagnose,
 )
@@ -120,25 +120,28 @@ def test_deepseek_solo_cambia_configuracion(evidencia):
 # ------------------------------------------------------------------ no reintentables
 
 @pytest.mark.parametrize("estado", [401, 403])
-def test_credencial_invalida_no_reintenta(evidencia, config, estado):
+def test_credencial_invalida_no_reintenta_y_cae_al_fallback(evidencia, config, estado):
+    # Defecto 11: una credencial mala no debe dejar al agente sin informe --
+    # tiene que degradar a fallback como cualquier otra falla permanente.
     sesion = SesionFalsa(RespuestaFalsa(estado))
     esperas, dormir = _esperas()
 
-    with pytest.raises(LLMConfigError):
-        diagnose(evidencia, "prompt", config, sesion, sleep=dormir)
+    resultado = diagnose(evidencia, "prompt", config, sesion, sleep=dormir)
 
+    assert resultado.from_fallback is True
     assert len(sesion.llamadas) == 1, "un 401 no debe consumir reintentos"
     assert esperas == []
 
 
-def test_peticion_invalida_no_reintenta(evidencia, config):
+def test_peticion_invalida_no_reintenta_y_cae_al_fallback(evidencia, config):
     sesion = SesionFalsa(RespuestaFalsa(400))
-    _, dormir = _esperas()
+    esperas, dormir = _esperas()
 
-    with pytest.raises(LLMConfigError):
-        diagnose(evidencia, "prompt", config, sesion, sleep=dormir)
+    resultado = diagnose(evidencia, "prompt", config, sesion, sleep=dormir)
 
+    assert resultado.from_fallback is True
     assert len(sesion.llamadas) == 1
+    assert esperas == []
 
 
 # ------------------------------------------------------------------ reintentables
@@ -164,13 +167,28 @@ def test_secuencia_de_backoff_es_1_2_4(evidencia, config):
 
 
 def test_timeout_de_red_se_reintenta(evidencia, config):
-    sesion = SesionFalsa(TimeoutError("se agotó el tiempo"))
+    # requests.exceptions.Timeout es lo que lanza un requests.Session real
+    # (el `_Session` inyectado en producción); diagnose() ahora captura esa
+    # jerarquía concreta, no Exception a secas (defecto 10).
+    sesion = SesionFalsa(requests.exceptions.Timeout("se agotó el tiempo"))
     _, dormir = _esperas()
 
     resultado = diagnose(evidencia, "prompt", config, sesion, sleep=dormir)
 
     assert resultado.from_fallback is True
     assert len(sesion.llamadas) == len(BACKOFF_SECONDS) + 1
+
+
+def test_error_de_red_no_relacionado_con_requests_no_se_captura(evidencia, config):
+    # Si el cliente HTTP inyectado lanza algo fuera de la jerarquía de
+    # requests, no es un fallo de red esperado -- debe propagarse, no
+    # tratarse en silencio como "reintentable" (defecto 10: nada de
+    # `except Exception` genérico).
+    sesion = SesionFalsa(ValueError("esto no es un error de requests"))
+    _, dormir = _esperas()
+
+    with pytest.raises(ValueError):
+        diagnose(evidencia, "prompt", config, sesion, sleep=dormir)
 
 
 def test_se_recupera_si_un_reintento_tiene_exito(evidencia, config):

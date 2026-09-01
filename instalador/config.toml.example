@@ -64,7 +64,9 @@ timeout_comando_s = 30
 # Cloudflare Workers AI y DeepSeek hablan el mismo formato OpenAI-compatible:
 # cambiar de proveedor es cambiar estas dos líneas, no el código.
 llm_url = "https://api.cloudflare.com/client/v4/accounts/TU_CUENTA/ai/v1/chat/completions"
-llm_modelo = "gpt-oss-120b"
+# Identificador fijado por CONTEXTO-IA.md §4: Cloudflare Workers AI expone
+# gpt-oss-120b bajo este namespace, no como "gpt-oss-120b" a secas.
+llm_modelo = "@cf/openai/gpt-oss-120b"
 llm_timeout_s = 30
 
 # Solo desarrollo: reutiliza respuestas anteriores en vez de llamar al proveedor.

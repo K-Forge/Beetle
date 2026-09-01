@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
+import requests
+
 from doctorjk.modelos import Diagnosis, SanitizedEvidence
 
 log = logging.getLogger("doctorjk.llm")
@@ -34,10 +36,6 @@ _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 
 class LLMError(Exception):
     """Falla al obtener un diagnóstico del proveedor."""
-
-
-class LLMConfigError(LLMError):
-    """Credencial inválida o configuración incorrecta: reintentar no ayuda."""
 
 
 class _Response(Protocol):
@@ -179,7 +177,9 @@ def diagnose(
     """Pide un diagnóstico al proveedor; degrada a fallback si no se logra.
 
     Nunca propaga la falla hacia arriba: el agente debe entregar un informe
-    aunque el proveedor esté caído. La distinción queda en `from_fallback`.
+    aunque el proveedor esté caído, sin credencial válida, con timeout agotado
+    o con una respuesta rota (plan-finalizacion-mvp.md Gate 2.3, defecto 11).
+    La distinción queda en `from_fallback`.
     """
     clave = _cache_key(config, prompt, evidence)
     cacheado = _cache_read(config, clave)
@@ -206,19 +206,26 @@ def diagnose(
             respuesta = session.post(
                 config.base_url, json=payload, headers=headers, timeout=config.timeout_s
             )
-        except Exception as error:  # noqa: BLE001 -- el timeout concreto lo define la sesión inyectada
-            # Se captura amplio a propósito: el tipo de excepción depende del
-            # cliente HTTP inyectado, y para el agente cualquier fallo de red
-            # es lo mismo (reintentable). El motivo queda registrado.
+        except requests.exceptions.RequestException as error:
+            # `_Session` es un Protocol para poder inyectar dobles en los
+            # tests, pero en producción SIEMPRE es un requests.Session real
+            # (main.py la construye así); esta es la jerarquía concreta que
+            # ese cliente lanza ante timeout, conexión rechazada, DNS, etc.
             ultimo_motivo = f"error de red: {type(error).__name__}"
             log.warning("intento %s falló: %s", intento + 1, ultimo_motivo)
         else:
             estado = respuesta.status_code
             if estado in (401, 403):
-                # Credencial mala: reintentar solo gasta cuota y tiempo.
-                raise LLMConfigError(f"el proveedor rechazó la credencial (HTTP {estado})")
+                # Credencial mala: reintentar solo gasta cuota y tiempo. No se
+                # propaga -- el agente igual debe entregar un informe
+                # (fallback), no quedarse en silencio (defecto 11).
+                ultimo_motivo = f"el proveedor rechazó la credencial (HTTP {estado})"
+                log.warning(ultimo_motivo)
+                break
             if 400 <= estado < 500 and estado not in _RETRYABLE_STATUS:
-                raise LLMConfigError(f"petición inválida (HTTP {estado})")
+                ultimo_motivo = f"petición inválida (HTTP {estado})"
+                log.warning(ultimo_motivo)
+                break
             if estado in _RETRYABLE_STATUS:
                 ultimo_motivo = f"HTTP {estado}"
                 log.warning("intento %s falló: %s", intento + 1, ultimo_motivo)
