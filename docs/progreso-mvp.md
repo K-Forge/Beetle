@@ -1150,3 +1150,77 @@ directos no llegaron a correrse) con Fase A repetida desde cero (nada
 quedó de pie para reusar). El código nuevo (allowlist de mounts,
 migración de 3 claves, validación con `-I`) todavía no se probó en el VPS
 real -- el próximo Paso 0 lo ejercita por primera vez ahí.
+
+### 9.5 Segundo intento real en el VPS (2026-09-01) — Paso 0, Fase A y smoke test del filtro de mounts OK; parado en el primer script de B2
+
+Ejecutado con punto de control explícito de MauItu: Paso 0 con HEAD nuevo
+(commit `2dd0f73`), Fase A completa y B2 (los 4 dry-runs directos); B1 no se
+repitió (ya estaba cubierto por el intento anterior), salvo un smoke test
+mínimo del filtro de mounts nuevo. Preflight en verde: timer de
+`apt-daily-upgrade` a 21h de distancia, rollback confirmado, línea base
+idéntica a §9.1, sin unidades ni backups residuales del intento anterior.
+
+**Completo y verificado:** Paso 0 (deploy por `git archive HEAD` con el
+commit que agrega `puntos_montaje_vigilados`, migración agregó exactamente
+esa clave -- las otras dos ya estaban de un intento previo --, `sudo -n -l`
+confirma los 4 scripts, backup tomado DESPUÉS de la migración). Fase A
+(unidades sintéticas activas, filler calculado sin crearlo, stub de LLM y
+`memhog.py` transferidos y verificados por hash). **Smoke test del filtro de
+mounts, la validación pendiente del hallazgo 1 de §9.4:** con
+`puntos_montaje_vigilados = ["/"]` confirmado por el preflight de §9.2.1, se
+bajó `disco_pct` a 5 y se esperaron >2 ciclos de monitor (25 s con
+`intervalo_monitor_s=5`) -- cero incidentes `disk_full` sobre `/boot` o
+`efivars` en la ventana. El filtro funciona en el VPS real, no solo en las
+pruebas locales.
+
+**Se paró en el primer script de B2** (`fix_servicio.sh`, llamado directo
+en dry-run tras provocar `service_failed` con `kill -9` sobre
+`doctorjk-test-svc`, reproduciendo solo la provocación de B1 sin repetir
+todo su pipeline): el script falló con
+`ERROR: /etc/doctorjk/config.toml tiene permisos de escritura demasiado
+amplios (modo 640); no se confía` -- el modo exacto que `install.sh` pone
+con `chmod 0640`. Hallazgo P0 nuevo, no anticipado: `comun.sh::
+_verify_config_ownership` tenía un bug de aritmética -- `8#$mode` ya
+convierte el string octal a un entero decimal, y aplicarle `/10 % 10` y
+`% 10` después extrae los dígitos DECIMALES de ese entero, no los dígitos
+OCTALES de `$mode`. Para modo 640 (`8#640` = decimal 416), `416 % 10 = 6`
+trae el bit 2 encendido por pura coincidencia decimal, sin relación con el
+bit real de "otros escribible" de 640 (que es 0). El resultado: **todo
+Modo 2 fallaba cerrado en cualquier instalación correcta**, no solo en este
+VPS -- reproducido de inmediato en local, sin ningún acceso al VPS, con un
+`bash -c` aislado.
+
+**Por qué ningún test local lo había atrapado antes:** `test_scripts_fix.py`
+prueba los 4 `fix_*.sh` contra un DOBLE de `comun.sh` que no verifica
+dueño/permisos en absoluto (documentado explícitamente en su propio
+encabezado) -- la única cobertura que existía para
+`_verify_config_ownership` era indirecta (`bash -n`, `shellcheck -x`,
+revisión de código), y ninguna de esas tres ejecuta la aritmética. `bash -n`
+valida sintaxis, no semántica.
+
+**Corregido en el momento, en local, no en el VPS:** la condición ahora usa
+una máscara octal directa sobre el valor ya convertido
+(`(8#$mode & 8#020) || (8#$mode & 8#002)`), que además maneja
+correctamente un cuarto dígito de setuid/sticky si `%a` lo trajera.
+Cobertura nueva en `pruebas/unitarias/test_comun_permisos.py`: fuente el
+`comun.sh` REAL (no un doble) con `stat` falseado por variables de entorno
+para controlar dueño/modo sin necesitar root -- 640/600/444/4640/1644 deben
+aceptarse, 660/642/666 deben rechazarse, dueño no-root debe rechazarse.
+Confirmado que estas 9 pruebas fallan (5 de 9) contra el código viejo antes
+de aplicar el fix, y pasan las 9 después. Suite completa: 297/297 (antes
+288, +9). Búsqueda en todo el repo (`rg '8#\$'`) confirma que esta era la
+única ocurrencia de este patrón.
+
+**Cleanup y salud final, verificados:** unidades de prueba detenidas y sin
+carga, `config.toml.bak-gate44` borrado, temporales de `/tmp` borrados, sin
+informes espurios (la recolección de evidencia del `service_failed`
+provocado para el smoke de B2 estaba programada para +1 min y el propio
+restart de config del cierre la cortó antes de que escribiera nada -- se
+verificó que el directorio de informes no tiene archivos nuevos). Estado
+final idéntico a la línea base de §9.1. Ningún incidente real se ejecutó,
+ninguna llamada a Cloudflare, ningún `push`/`merge`.
+
+**Pendiente antes de reintentar:** el fix de `comun.sh` corregido este
+intento **todavía no se probó en el VPS real** -- el próximo Paso 0 es la
+primera vez que se ejercita ahí. Retomar desde B2 (ninguno de los 4
+dry-runs directos llegó a completarse) con Fase A repetida desde cero.
