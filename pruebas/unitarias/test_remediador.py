@@ -157,20 +157,57 @@ def test_stdout_stderr_se_sanitizan(tmp_path):
     assert "[IP_1]" in resultado.stdout
 
 
-def test_variables_de_entorno_reciben_dry_run_y_listas(tmp_path):
+def test_no_se_pasa_politica_por_variables_de_entorno(tmp_path):
+    # Hallazgo de auditoría #1 (2026-09-01): en producción el script corre
+    # vía "sudo -n" y env_reset elimina cualquier DOCTORJK_* -- este módulo
+    # ya no debe intentar pasar política por ahí ni por argv más allá del
+    # recurso objetivo. El script relee su propia política de config.toml.
     _instalar_script(
         tmp_path,
         "fix_puerto.sh",
         "#!/usr/bin/env bash\n"
-        'echo "dry_run=$DOCTORJK_DRY_RUN servicios=$DOCTORJK_MONITORED_SERVICES"\n'
+        "env | grep -c '^DOCTORJK_' || true\n"
         "exit 0\n",
     )
-    config = _config(tmp_path, dry_run=False, auto_fix=True, monitored_services=("nginx.service",))
+    config = _config(tmp_path, monitored_services=("nginx.service",))
     resultado = remediate(
         _incidente(SignalType.PORT_OCCUPIED, "port:80:occupied"), config, tmp_path
     )
-    assert "dry_run=0" in resultado.stdout
-    assert "servicios=nginx.service" in resultado.stdout
+    assert resultado.stdout.strip() == "0"
+    assert len(resultado.argv) == 2  # script + recurso, nada de config_path
+
+
+def test_dry_run_no_se_reporta_como_resuelto(tmp_path):
+    # Hallazgo de auditoría #5: un script en dry-run sale 0 sin haber
+    # verificado nada real. remediate() decide el outcome por config.dry_run
+    # ANTES de mirar el código de salida, nunca confía en que el script se
+    # auto-reporte como resuelto.
+    _instalar_script(
+        tmp_path,
+        "fix_disco.sh",
+        "#!/usr/bin/env bash\necho '[DRY-RUN] no ejecutado'\nexit 0\n",
+    )
+    # dry_run=True junto con auto_fix=True normalmente lo rechaza
+    # config.load_config(), pero remediate() no debe confiar en esa
+    # invariante ajena -- debe comportarse bien incluso si algo más arriba
+    # construyó un AppConfig así (defensa en profundidad).
+    config = _config(tmp_path, dry_run=True)
+    resultado = remediate(_incidente(SignalType.DISK_FULL, "disk:/"), config, tmp_path)
+
+    assert resultado.outcome is RemediationOutcome.DRY_RUN
+    assert resultado.exit_code == 0  # el script sí corrió y salió 0...
+    # ... pero eso nunca se reporta como una corrección real:
+    assert resultado.outcome is not RemediationOutcome.RESOLVED
+
+
+def test_timeout_por_default_usa_command_timeout_s(tmp_path):
+    # Hallazgo de auditoría #9: el timeout de remediación no debe ignorar
+    # timeout_comando_s -- mismo contrato que el resto de comandos externos.
+    _instalar_script(tmp_path, "fix_disco.sh", "#!/usr/bin/env bash\nsleep 5\n")
+    config = _config(tmp_path, command_timeout_s=0.2)
+    resultado = remediate(_incidente(SignalType.DISK_FULL, "disk:/"), config, tmp_path)
+    assert resultado.outcome is RemediationOutcome.FAILED
+    assert "tiempo agotado" in resultado.stderr
 
 
 def test_target_argument_extrae_el_recurso_del_resource_key(tmp_path):
