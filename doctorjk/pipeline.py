@@ -58,7 +58,7 @@ def handle_incident(
     log.info("procesando incidente %s (%s)", incident.incident_id, incident.resource_key)
 
     try:
-        evidencia = deps.collect_evidence(incident, reports_dir, now)
+        evidence = deps.collect_evidence(incident, reports_dir, now)
     except OSError as error:
         log.error("no pude recolectar evidencia de %s: %s", incident.incident_id, error)
         return None
@@ -67,26 +67,26 @@ def handle_incident(
     # evidencia del incidente no se pierde. Que falle esta escritura no impide
     # diagnosticar -- se pierde la copia de auditoría, no el diagnóstico.
     try:
-        ruta_cruda = deps.write_raw_evidence(evidencia, reports_dir)
-        log.info("evidencia cruda guardada en %s", ruta_cruda.name)
+        raw_path = deps.write_raw_evidence(evidence, reports_dir)
+        log.info("evidencia cruda guardada en %s", raw_path.name)
     except OSError as error:
         log.error("no pude guardar la evidencia cruda: %s", error)
 
-    # Única frontera hacia afuera. A partir de aquí no se toca `evidencia`.
-    sanitizada = deps.sanitize_evidence(evidencia)
+    # Única frontera hacia afuera. A partir de aquí no se toca `evidence`.
+    sanitized = deps.sanitize_evidence(evidence)
 
-    diagnostico = deps.diagnose(sanitizada, prompt)
-    if diagnostico.from_fallback:
+    diagnosis = deps.diagnose(sanitized, prompt)
+    if diagnosis.from_fallback:
         log.warning(
             "incidente %s diagnosticado sin modelo (fallback local)", incident.incident_id
         )
 
     try:
-        destino = deps.save_report(diagnostico, incident, reports_dir, now)
+        destination = deps.save_report(diagnosis, incident, reports_dir, now)
     except OSError as error:
         log.error("no pude escribir el informe de %s: %s", incident.incident_id, error)
         return None
 
-    if destino is not None:
-        log.info("informe escrito en %s", destino.name)
-    return destino
+    if destination is not None:
+        log.info("informe escrito en %s", destination.name)
+    return destination
