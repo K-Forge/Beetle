@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from doctorjk import recolector
+from doctorjk.config import RemediationMode
 from doctorjk.main import (
     AppContext,
     PendingIncident,
@@ -578,3 +579,72 @@ def test_dos_recursos_mantienen_estado_independiente(tmp_path):
 
     informes = list(tmp_path.glob("*.md"))
     assert len(informes) == 2
+
+
+# ------------------------------------------------- Modo 2 conectado al pipeline (Gate 4)
+
+
+def test_modo_2_corrige_y_anexa_el_resultado_al_informe(tmp_path):
+    scripts_dir = tmp_path / "scripts-fix"
+    scripts_dir.mkdir()
+    script = scripts_dir / "fix_servicio.sh"
+    script.write_text("#!/usr/bin/env bash\necho \"reinicié $1\"\nexit 0\n", encoding="utf-8")
+    script.chmod(0o755)
+
+    config = _config_de_prueba(
+        tmp_path,
+        service_cycles=2,
+        remediation_mode=RemediationMode.SCRIPTS,
+        auto_fix=True,
+        dry_run=False,
+    )
+    reloj = {"ahora": datetime(2026, 8, 26, 12, 0, 0, tzinfo=timezone.utc)}
+    procesar, _ = build_incident_pipeline(
+        config,
+        "prompt",
+        _SesionFalsa(),
+        scripts_dir=scripts_dir,
+        now_fn=lambda: reloj["ahora"],
+        remediation_command_prefix=(),  # sin sudo real en la prueba
+    )
+
+    t0 = reloj["ahora"]
+    procesar(_snapshot_servicio(activo=False, captured_at=t0))
+    reloj["ahora"] = t0 + timedelta(seconds=30)
+    procesar(_snapshot_servicio(activo=False, captured_at=reloj["ahora"]))  # confirma
+    reloj["ahora"] = t0 + timedelta(seconds=30) + recolector.WINDOW_AFTER
+    procesar(_snapshot_servicio(activo=False, captured_at=t0 + timedelta(seconds=30)))
+
+    informes = [p for p in tmp_path.rglob("*.md")]
+    assert len(informes) == 1
+    contenido = informes[0].read_text(encoding="utf-8")
+    assert "## Corrección automática (Modo 2)" in contenido
+    assert "Resuelto automáticamente" in contenido
+    assert "reinicié postgresql.service" in contenido
+
+
+def test_modo_2_sin_scripts_dir_no_se_ejecuta(tmp_path):
+    # scripts_dir=None (default): Modo 1 sigue funcionando igual que antes
+    # de Gate 4, sin depender de que exista scripts-fix/.
+    config = _config_de_prueba(
+        tmp_path,
+        service_cycles=2,
+        remediation_mode=RemediationMode.SCRIPTS,
+        auto_fix=True,
+        dry_run=False,
+    )
+    reloj = {"ahora": datetime(2026, 8, 26, 12, 0, 0, tzinfo=timezone.utc)}
+    procesar, _ = build_incident_pipeline(
+        config, "prompt", _SesionFalsa(), now_fn=lambda: reloj["ahora"]
+    )
+
+    t0 = reloj["ahora"]
+    procesar(_snapshot_servicio(activo=False, captured_at=t0))
+    reloj["ahora"] = t0 + timedelta(seconds=30)
+    procesar(_snapshot_servicio(activo=False, captured_at=reloj["ahora"]))
+    reloj["ahora"] = t0 + timedelta(seconds=30) + recolector.WINDOW_AFTER
+    procesar(_snapshot_servicio(activo=False, captured_at=t0 + timedelta(seconds=30)))
+
+    informes = list(tmp_path.glob("*.md"))
+    assert len(informes) == 1
+    assert "Corrección automática" not in informes[0].read_text(encoding="utf-8")

@@ -79,8 +79,17 @@ def remediate(
     config: AppConfig,
     scripts_dir: Path,
     timeout_s: float = DEFAULT_SCRIPT_TIMEOUT_S,
+    command_prefix: tuple[str, ...] = (),
 ) -> RemediationResult:
     """Ejecuta la corrección determinista de `incident` si corresponde.
+
+    `command_prefix` antepone argumentos al script (en producción,
+    `("sudo", "-n")`, ver build_incident_pipeline() en main.py): el propio
+    `doctorjk` corre sin privilegios (CONTEXTO-IA.md §8.5), así que necesita
+    escalar para reiniciar servicios o limpiar espacio. `sudo -n` nunca pide
+    contraseña -- si el sudoers no está bien configurado, falla rápido en vez
+    de colgarse esperando una entrada que nunca llega. Vacío por default para
+    que las pruebas corran los scripts directo, sin depender de sudoers real.
 
     Nunca lanza: un script ausente, sin permiso de ejecución o que se cuelga
     se registra como FAILED, igual que uno que corrió pero no verificó el
@@ -101,7 +110,7 @@ def remediate(
         )
         return _skip(incident, RemediationOutcome.NOT_MAPPED, started_at)
 
-    argv = (str(scripts_dir / script_name), _target_argument(incident))
+    argv = command_prefix + (str(scripts_dir / script_name), _target_argument(incident))
     env = _build_script_env(incident, config)
 
     try:

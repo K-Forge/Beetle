@@ -28,7 +28,7 @@ from typing import Callable, Sequence
 
 import requests
 
-from doctorjk import informe, llm, monitor, recolector, sanitizador
+from doctorjk import informe, llm, monitor, recolector, remediador, sanitizador
 from doctorjk.config import AppConfig, ConfigError, load_config
 from doctorjk.detector import Detector
 from doctorjk.modelos import Incident, IncidentState, SignalType, SystemSnapshot
@@ -41,6 +41,7 @@ DEFAULT_FIFO_PATH = "/run/doctorjk/trigger.fifo"
 # para pruebas o instalaciones no estándar.
 DEFAULT_CONFIG_PATH = "/etc/doctorjk/config.toml"
 DEFAULT_PROMPT_PATH = "/opt/doctorjk/prompts/diagnosticador.md"
+DEFAULT_SCRIPTS_DIR = "/opt/doctorjk/scripts-fix"
 # Tope de incidentes esperando su ventana +1 minuto (Gate 2.2): protege la
 # memoria si journalctl o systemctl se degradan y el agente confirma
 # incidentes más rápido de lo que puede procesarlos.
@@ -79,6 +80,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--prompt",
         default=os.environ.get("DOCTORJK_PROMPT_PATH", DEFAULT_PROMPT_PATH),
         help=f"ruta del prompt de diagnóstico (default: {DEFAULT_PROMPT_PATH})",
+    )
+    parser.add_argument(
+        "--scripts-dir",
+        default=os.environ.get("DOCTORJK_SCRIPTS_DIR", DEFAULT_SCRIPTS_DIR),
+        help=f"directorio de scripts-fix/ para el Modo 2 (default: {DEFAULT_SCRIPTS_DIR})",
     )
     parser.add_argument(
         "--interval",
@@ -241,8 +247,10 @@ def on_incident(
     reports_dir: Path,
     deps: PipelineDeps,
     now: datetime,
-) -> None:
-    """Puente entre el detector y el pipeline.
+) -> Path | None:
+    """Puente entre el detector y el pipeline. Devuelve la ruta del informe
+    escrito (o None si no se pudo escribir) para que build_incident_pipeline()
+    pueda anexarle el resultado del Modo 2 después.
 
     No lleva try/except propio (defecto 10: nada de `except Exception` a
     secas): `handle_incident()` ya garantiza no propagar los fallos de E/S
@@ -250,7 +258,7 @@ def on_incident(
     más escapa de acá es un bug real, no una falla operativa esperada, y debe
     hacer ruido en vez de esconderse.
     """
-    handle_incident(incident, prompt, reports_dir, now, deps)
+    return handle_incident(incident, prompt, reports_dir, now, deps)
 
 
 def _persistence_cycles_by_type(config: AppConfig) -> dict[SignalType, int]:
@@ -280,8 +288,10 @@ def build_incident_pipeline(
     config: AppConfig,
     prompt: str,
     session: object,
+    scripts_dir: Path | None = None,
     interval_s: float | None = None,
     now_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    remediation_command_prefix: tuple[str, ...] = ("sudo", "-n"),
 ) -> tuple[Callable[[SystemSnapshot], None], Callable[[datetime], float]]:
     """Arma el Detector de larga vida, la cola de incidentes pendientes de la
     ventana +1 minuto (Gate 2.2) y las dos piezas que el loop de main()
@@ -299,6 +309,13 @@ def build_incident_pipeline(
     venció -- separado de `snapshot.captured_at` porque la ventana +1 minuto
     es tiempo real transcurrido, no un campo del snapshot. Inyectable para
     poder probar la cola sin depender de time.sleep() de verdad.
+
+    `scripts_dir` habilita el Modo 2 después de cada diagnóstico (Gate 4):
+    con None, remediate() nunca se llama y el comportamiento es idéntico al
+    de antes de Gate 4 -- Modo 1 nunca depende de que Modo 2 esté disponible.
+    `remediation_command_prefix` es ("sudo", "-n") en producción (doctorjk no
+    tiene privilegios propios, ver remediador.py); vacío en pruebas que
+    corren un script de prueba sin sudoers real.
     """
     effective_interval = interval_s if interval_s is not None else config.monitor_interval_s
     detector = Detector(
@@ -335,7 +352,15 @@ def build_incident_pipeline(
 
         now = now_fn()
         for pending_incident in pop_due_incidents(pending, now):
-            on_incident(pending_incident.incident, prompt, config.reports_dir, deps, now)
+            report_path = on_incident(pending_incident.incident, prompt, config.reports_dir, deps, now)
+            if report_path is not None and scripts_dir is not None:
+                resultado = remediador.remediate(
+                    pending_incident.incident,
+                    config,
+                    scripts_dir,
+                    command_prefix=remediation_command_prefix,
+                )
+                informe.append_remediation(report_path, resultado)
 
     def next_wait(now: datetime) -> float:
         return seconds_until_next_event(pending, effective_interval, now)
@@ -366,7 +391,7 @@ def build_app(args: argparse.Namespace) -> AppContext:
 
     session = requests.Session()
     on_snapshot, next_wait = build_incident_pipeline(
-        config, prompt, session, interval_s=interval_s
+        config, prompt, session, scripts_dir=Path(args.scripts_dir), interval_s=interval_s
     )
     monitored_service_names = _monitored_service_names(config)
 
