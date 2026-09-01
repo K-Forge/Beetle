@@ -20,7 +20,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$DIR/comun.sh"
 
 port="${1:-}"
-[[ -n "$port" ]] || fail "uso: $0 <puerto> [config.toml]"
+[[ -n "$port" ]] || fail "uso: $0 <puerto>"
 
 listening_pid() {
   ss -tlnp "sport = :$port" 2>/dev/null \

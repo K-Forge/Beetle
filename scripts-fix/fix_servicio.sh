@@ -17,7 +17,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$DIR/comun.sh"
 
 unit="${1:-}"
-[[ -n "$unit" ]] || fail "uso: $0 <unidad-systemd> [config.toml]"
+[[ -n "$unit" ]] || fail "uso: $0 <unidad-systemd>"
 
 monitored="$(read_config_attr monitored_services)"
 list_contains "$unit" "$monitored" || fail "unidad no vigilada, no se toca: $unit"

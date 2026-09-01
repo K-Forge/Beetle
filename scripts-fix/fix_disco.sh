@@ -25,7 +25,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$DIR/comun.sh"
 
 mount_point="${1:-}"
-[[ -n "$mount_point" ]] || fail "uso: $0 <punto-de-montaje> [config.toml]"
+[[ -n "$mount_point" ]] || fail "uso: $0 <punto-de-montaje>"
 [[ "$mount_point" == "/" ]] || fail "sin política de limpieza para $mount_point (solo se cubre /); escalar sin actuar"
 
 threshold="$(read_config_attr disk_pct_threshold)"
