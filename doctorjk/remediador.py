@@ -7,16 +7,20 @@
 # existe -- eso ya lo hizo detector.py -- ni redacta el diagnóstico -- eso es
 # llm.py. Solo ejecuta la corrección determinista y audita lo que pasó.
 #
-# Frontera de privilegios (hallazgo de auditoría #1, 2026-09-01): este
-# módulo corre sin privilegios y NUNCA pasa política (listas vigiladas,
-# umbrales, dry-run) por variables de entorno al script. En producción el
-# script corre vía "sudo -n" y sudo con env_reset (default de seguridad)
-# elimina cualquier DOCTORJK_* antes de que el script las vea; agregar
-# SETENV/env_keep en sudoers para que sobrevivan le daría al proceso sin
-# privilegios la posibilidad de fabricar la allowlist que ve el script que
-# corre como root. La política viaja como argumento la ruta de config.toml
-# (root-owned, 0640), y cada script la relee él mismo, ya con privilegios,
-# usando el mismo parser validado (doctorjk.config.load_config).
+# Frontera de privilegios (hallazgos de auditoría #1 y #1-bis, 2026-09-01):
+# este módulo corre sin privilegios y NUNCA pasa política (listas
+# vigiladas, umbrales, dry-run) al script -- ni por variables de entorno ni
+# por argv. En producción el script corre vía "sudo -n" y sudo con
+# env_reset (default de seguridad) elimina cualquier DOCTORJK_* antes de
+# que el script las vea; agregar SETENV/env_keep en sudoers para que
+# sobrevivan le daría al proceso sin privilegios la posibilidad de fabricar
+# la allowlist que ve el script que corre como root. Pasar la ruta de
+# config.toml por argv tampoco es seguro: sudoers autoriza la ruta exacta
+# del script pero no restringe sus argumentos, así que sería igual de
+# manipulable. `argv` acá solo lleva el recurso objetivo (unidad, punto de
+# montaje, puerto); cada script relee su propia política de la ruta fija
+# que define comun.sh, ya con privilegios, usando el mismo parser validado
+# (doctorjk.config.load_config).
 from __future__ import annotations
 
 import logging
@@ -139,11 +143,15 @@ def remediate(
 
     finished_at = datetime.now(timezone.utc)
 
-    # config.dry_run se decide ANTES de mirar el código de salida: un script
-    # en dry-run sale 0 sin haber verificado nada real, y remediador.py no
-    # confía en que el script se auto-reporte -- lo sabe por su propia
-    # config, la misma fuente que el script releyó (hallazgo #5).
-    if config.dry_run:
+    # DRY_RUN solo aplica cuando el script efectivamente corrió y salió 0
+    # (hallazgo #5, corregido tras revisión post-commit 2026-09-01): un
+    # script ausente, colgado o que sale con código distinto de 0 sigue
+    # siendo FAILED sin importar config.dry_run -- dry_run no puede
+    # esconder un fallo real detrás de una etiqueta que suena a "todo bien,
+    # solo faltó ejecutar". remediador.py no confía en que el script se
+    # auto-reporte como resuelto: lo decide por su propia config, la misma
+    # fuente que el script releyó.
+    if exit_code == 0 and config.dry_run:
         outcome = RemediationOutcome.DRY_RUN
     elif exit_code == 0:
         outcome = RemediationOutcome.RESOLVED
