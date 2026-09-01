@@ -8,12 +8,15 @@
 # prueba (plan-mvp.md bloque A1, paso 2).
 from __future__ import annotations
 
+import subprocess
+
 from doctorjk.monitor import (
     parse_disk_output,
     parse_failed_services_output,
     parse_load_output,
     parse_memory_output,
     parse_ports_output,
+    query_service_states,
     run_command,
 )
 
@@ -114,3 +117,44 @@ def test_run_command_timeout():
     resultado = run_command(["sleep", "5"], timeout_s=0.05)
     assert resultado.success is False
     assert "tiempo agotado" in resultado.error
+
+
+# ----------------------------------------------------------- query_service_states
+
+
+def test_query_service_states_lista_vacia_no_ejecuta_nada(monkeypatch):
+    def falla_si_se_llama(*args, **kwargs):
+        raise AssertionError("no debería ejecutar systemctl sin servicios que consultar")
+
+    monkeypatch.setattr(subprocess, "run", falla_si_se_llama)
+    assert query_service_states([], timeout_s=2.0) == {}
+
+
+def test_query_service_states_devuelve_un_booleano_por_unidad():
+    # Ninguna de estas unidades existe en la máquina de pruebas: is-active
+    # debe devolver una línea no "active" para cada una, código de salida
+    # distinto de 0, y aun así el resultado debe reflejar el estado real.
+    estados = query_service_states(
+        ["unidad-inexistente-doctorjk-a.service", "unidad-inexistente-doctorjk-b.service"],
+        timeout_s=2.0,
+    )
+    assert estados == {
+        "unidad-inexistente-doctorjk-a.service": False,
+        "unidad-inexistente-doctorjk-b.service": False,
+    }
+
+
+def test_query_service_states_comando_ausente_devuelve_none(monkeypatch):
+    def sin_systemctl(*args, **kwargs):
+        raise FileNotFoundError("systemctl no encontrado")
+
+    monkeypatch.setattr(subprocess, "run", sin_systemctl)
+    assert query_service_states(["nginx.service"], timeout_s=2.0) is None
+
+
+def test_query_service_states_timeout_devuelve_none(monkeypatch):
+    def se_cuelga(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="systemctl", timeout=0.01)
+
+    monkeypatch.setattr(subprocess, "run", se_cuelga)
+    assert query_service_states(["nginx.service"], timeout_s=0.01) is None

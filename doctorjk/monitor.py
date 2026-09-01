@@ -26,6 +26,8 @@ from doctorjk.modelos import (
     ListeningPort,
     LoadAverage,
     MemoryUsage,
+    MonitoredPort,
+    ServiceState,
     Signal,
     SignalType,
     SystemSnapshot,
@@ -79,6 +81,49 @@ def run_command(argv: Sequence[str], timeout_s: float) -> CommandResult:
         return CommandResult(stdout=completado.stdout, success=False, error=mensaje)
 
     return CommandResult(stdout=completado.stdout, success=True, error=None)
+
+
+def query_service_states(
+    services: Sequence[str], timeout_s: float
+) -> dict[str, bool] | None:
+    """Consulta el estado activo de cada servicio vigilado con una sola
+    llamada a `systemctl is-active`.
+
+    A diferencia de run_command(), un código de salida distinto de 0 acá es
+    normal y esperado: `systemctl is-active` devuelve no-cero si CUALQUIERA
+    de los servicios pedidos no está activo, no significa que el comando
+    haya fallado (plan-finalizacion-mvp.md Gate 1.3, defecto 1). Por eso este
+    helper no usa run_command() y solo trata como falla real la ausencia del
+    comando o un timeout: la única forma correcta de saber si un servicio
+    vigilado está sano es preguntarle a systemd, nunca inferirlo de su
+    ausencia en `--failed`.
+    """
+    if not services:
+        return {}
+    try:
+        completado = subprocess.run(
+            ["systemctl", "is-active", *services],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+        )
+    except FileNotFoundError as error:
+        logger.warning("comando no encontrado: systemctl (%s)", error)
+        return None
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "tiempo agotado tras %ss consultando estado de %d servicio(s)",
+            timeout_s,
+            len(services),
+        )
+        return None
+
+    # systemctl is-active imprime exactamente una línea por unidad pedida, en
+    # el mismo orden -- incluida "unknown" para una unidad inexistente, que
+    # se trata como inactiva y no como falla de adquisición.
+    lineas = completado.stdout.splitlines()
+    return {servicio: linea.strip() == "active" for servicio, linea in zip(services, lineas)}
 
 
 # --------------------------------------------------------------- parsers puros
@@ -167,10 +212,19 @@ def parse_load_output(stdout: str) -> LoadAverage | None:
 # --------------------------------------------------------------- muestreo
 
 
-def take_snapshot(timeout_s: float = DEFAULT_COMMAND_TIMEOUT_S) -> SystemSnapshot:
+def take_snapshot(
+    timeout_s: float = DEFAULT_COMMAND_TIMEOUT_S,
+    monitored_services: frozenset[str] = frozenset(),
+) -> SystemSnapshot:
     """Toma una lectura completa del servidor. Cada categoría es independiente:
     si una herramienta falla, esa categoría queda vacía y marcada como no
-    disponible, pero las demás igual se reportan."""
+    disponible, pero las demás igual se reportan.
+
+    `monitored_services` es aparte de `failed_services`: sin esa lista
+    explícita no hay forma de emitir una señal sana para un servicio que se
+    recuperó, porque `systemctl --failed` simplemente deja de mencionarlo
+    (plan-finalizacion-mvp.md Gate 1.3, defecto 1).
+    """
     servicios = run_command(
         ["systemctl", "list-units", "--failed", "--no-legend", "--plain", "--no-pager"],
         timeout_s,
@@ -182,6 +236,20 @@ def take_snapshot(timeout_s: float = DEFAULT_COMMAND_TIMEOUT_S) -> SystemSnapsho
 
     memoria_parseada = parse_memory_output(memoria.stdout) if memoria.success else None
     carga_parseada = parse_load_output(carga.stdout) if carga.success else None
+
+    if monitored_services:
+        estados = query_service_states(sorted(monitored_services), timeout_s)
+        estados_disponibles = estados is not None
+        estados_tupla = (
+            tuple(ServiceState(name=nombre, active=activo) for nombre, activo in estados.items())
+            if estados is not None
+            else ()
+        )
+    else:
+        # Nada vigilado explícitamente: no es una falla de adquisición, es
+        # que no se pidió nada.
+        estados_disponibles = True
+        estados_tupla = ()
 
     return SystemSnapshot(
         captured_at=datetime.now(timezone.utc),
@@ -197,6 +265,8 @@ def take_snapshot(timeout_s: float = DEFAULT_COMMAND_TIMEOUT_S) -> SystemSnapsho
         ports_available=puertos.success,
         load=carga_parseada,
         load_available=carga.success and carga_parseada is not None,
+        service_states=estados_tupla,
+        service_states_available=estados_disponibles,
     )
 
 
@@ -207,7 +277,7 @@ def normalize_snapshot(
     snapshot: SystemSnapshot,
     disk_pct_threshold: int,
     memory_available_mb_threshold: int,
-    monitored_ports: frozenset[int],
+    monitored_ports: tuple[MonitoredPort, ...],
 ) -> tuple[Signal, ...]:
     """Convierte un SystemSnapshot a Signal (contrato de la tarea #173).
 
@@ -220,20 +290,22 @@ def normalize_snapshot(
     señales: list[Signal] = []
     marca_de_tiempo = snapshot.captured_at
 
-    # Servicios: systemctl solo reporta los que ya están fallidos. Que un
-    # servicio deje de aparecer entre una lectura y la siguiente es la forma
-    # en que se entera el detector de que se recuperó; no hace falta emitir
-    # una señal "sana" explícita.
-    if snapshot.services_available:
-        for servicio in snapshot.failed_services:
+    # Servicios vigilados explícitamente (config.servicios_vigilados): se
+    # emite una señal por cada uno, sano o cruzado, en todos los ciclos. A
+    # diferencia de `failed_services` (que solo lista lo ya fallido y por eso
+    # nunca informa una recuperación), `service_states` viene de consultar
+    # cada unidad de la lista, así que el detector se entera igual cuando el
+    # servicio vuelve a estar activo (plan-finalizacion-mvp.md defecto 1).
+    if snapshot.service_states_available:
+        for estado in snapshot.service_states:
             señales.append(
                 Signal(
                     timestamp=marca_de_tiempo,
                     signal_type=SignalType.SERVICE_FAILED,
-                    value=servicio.name,
+                    value="active" if estado.active else "inactive",
                     threshold="active",
-                    crossed=True,
-                    key=f"service:{servicio.name}",
+                    crossed=not estado.active,
+                    key=f"service:{estado.name}",
                 )
             )
 
@@ -267,17 +339,39 @@ def normalize_snapshot(
     # Puertos: solo se evalúan los que el cliente configuró como esperados.
     # Sin esa lista no hay umbral contra el cual cruzar, así que un puerto
     # abierto que nadie pidió vigilar no genera señal.
+    #
+    # Dos tipos por puerto, con claves distintas porque el detector guarda un
+    # estado por clave (defecto 6): PORT_DOWN es "nadie escucha"; PORT_OCCUPIED
+    # es "alguien escucha, pero no es el servicio que se esperaba" -- distinto
+    # de sano aunque el puerto esté "ocupado", porque quien lo tomó no es quien
+    # debía. Sin estado del servicio esperado (no vigilado, o consulta no
+    # disponible) no hay base para declarar ocupación indebida: queda sano.
     if snapshot.ports_available:
         puertos_escuchando = {p.port for p in snapshot.ports}
-        for puerto_esperado in monitored_ports:
+        estado_por_servicio = {e.name: e.active for e in snapshot.service_states}
+        for vigilado in monitored_ports:
+            escuchando = vigilado.port in puertos_escuchando
             señales.append(
                 Signal(
                     timestamp=marca_de_tiempo,
                     signal_type=SignalType.PORT_DOWN,
-                    value="listening" if puerto_esperado in puertos_escuchando else "down",
+                    value="listening" if escuchando else "down",
                     threshold="listening",
-                    crossed=puerto_esperado not in puertos_escuchando,
-                    key=f"port:{puerto_esperado}",
+                    crossed=not escuchando,
+                    key=f"port:{vigilado.port}:down",
+                )
+            )
+
+            servicio_activo = estado_por_servicio.get(vigilado.service)
+            ocupado_indebidamente = escuchando and servicio_activo is False
+            señales.append(
+                Signal(
+                    timestamp=marca_de_tiempo,
+                    signal_type=SignalType.PORT_OCCUPIED,
+                    value="occupied_by_other" if ocupado_indebidamente else "owned_or_free",
+                    threshold="owned_or_free",
+                    crossed=ocupado_indebidamente,
+                    key=f"port:{vigilado.port}:occupied",
                 )
             )
 

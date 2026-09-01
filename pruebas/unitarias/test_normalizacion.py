@@ -1,18 +1,20 @@
 # Pruebas de normalize_snapshot(): SystemSnapshot -> Signal, el contrato de
-# la tarea #173. Cubren las cuatro senales que ya se emiten (servicio, disco,
-# memoria, puerto) y las dos reglas que no son obvias del nombre de la
-# funcion: una categoria no disponible no debe verse como "sana", y la carga
-# todavia no se convierte en Signal.
+# la tarea #173, ya corregido por plan-finalizacion-mvp.md Gate 1.3: los
+# servicios y puertos vigilados emiten señal sana o cruzada en todos los
+# ciclos (defecto 1), y cada puerto trae dos señales independientes --
+# port_down (nadie escucha) y port_occupied (alguien escucha, pero no es el
+# servicio esperado) -- porque son condiciones distintas (defecto 6).
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
 from doctorjk.modelos import (
     DiskUsage,
-    FailedService,
     ListeningPort,
     LoadAverage,
     MemoryUsage,
+    MonitoredPort,
+    ServiceState,
     SignalType,
     SystemSnapshot,
 )
@@ -20,7 +22,7 @@ from doctorjk.monitor import normalize_snapshot
 
 MARCA_DE_TIEMPO = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
 
-UMBRALES = dict(disk_pct_threshold=90, memory_available_mb_threshold=400, monitored_ports=frozenset())
+UMBRALES = dict(disk_pct_threshold=90, memory_available_mb_threshold=400, monitored_ports=())
 
 
 def _snapshot(**overrides) -> SystemSnapshot:
@@ -36,24 +38,65 @@ def _snapshot(**overrides) -> SystemSnapshot:
         ports_available=True,
         load=LoadAverage(load_1m=0.1, load_5m=0.1, load_15m=0.1),
         load_available=True,
+        service_states=(),
+        service_states_available=True,
     )
     base.update(overrides)
     return SystemSnapshot(**base)
 
 
-def test_servicio_fallido_cruza():
-    snapshot = _snapshot(failed_services=(FailedService(name="postgresql.service"),))
+# --------------------------------------------------------------------- servicios
+
+
+def test_servicio_vigilado_inactivo_cruza():
+    snapshot = _snapshot(service_states=(ServiceState(name="postgresql.service", active=False),))
     señales = normalize_snapshot(snapshot, **UMBRALES)
     de_servicio = [s for s in señales if s.signal_type is SignalType.SERVICE_FAILED]
     assert len(de_servicio) == 1
     assert de_servicio[0].crossed is True
     assert de_servicio[0].key == "service:postgresql.service"
-    assert de_servicio[0].value == "postgresql.service"
+    assert de_servicio[0].value == "inactive"
 
 
-def test_sin_servicios_fallidos_no_emite_nada():
+def test_servicio_vigilado_activo_no_cruza():
+    # El defecto original: un servicio sano nunca aparece en `--failed`, así
+    # que antes no se emitía nada. Ahora sí, con crossed=False.
+    snapshot = _snapshot(service_states=(ServiceState(name="nginx.service", active=True),))
+    señal = next(
+        s for s in normalize_snapshot(snapshot, **UMBRALES) if s.signal_type is SignalType.SERVICE_FAILED
+    )
+    assert señal.crossed is False
+    assert señal.key == "service:nginx.service"
+    assert señal.value == "active"
+
+
+def test_sin_servicios_vigilados_no_emite_nada():
     señales = normalize_snapshot(_snapshot(), **UMBRALES)
     assert not [s for s in señales if s.signal_type is SignalType.SERVICE_FAILED]
+
+
+def test_dos_servicios_vigilados_mantienen_claves_independientes():
+    snapshot = _snapshot(
+        service_states=(
+            ServiceState(name="nginx.service", active=True),
+            ServiceState(name="postgresql.service", active=False),
+        )
+    )
+    señales = {s.key: s for s in normalize_snapshot(snapshot, **UMBRALES) if s.signal_type is SignalType.SERVICE_FAILED}
+    assert señales["service:nginx.service"].crossed is False
+    assert señales["service:postgresql.service"].crossed is True
+
+
+def test_service_states_no_disponible_no_emite_señal():
+    snapshot = _snapshot(
+        service_states_available=False,
+        service_states=(),
+    )
+    señales = normalize_snapshot(snapshot, **UMBRALES)
+    assert not [s for s in señales if s.signal_type is SignalType.SERVICE_FAILED]
+
+
+# ------------------------------------------------------------------------ disco
 
 
 def test_disco_cruzado_y_no_cruzado_en_la_misma_lectura():
@@ -66,6 +109,17 @@ def test_disco_cruzado_y_no_cruzado_en_la_misma_lectura():
     señales = {s.key: s for s in normalize_snapshot(snapshot, **UMBRALES)}
     assert señales["disk:/"].crossed is True
     assert señales["disk:/dev/shm"].crossed is False
+
+
+def test_categoria_no_disponible_no_emite_señal_sana():
+    # Un df que fallo no debe traducirse en "0% de uso, todo bien": debe
+    # quedar sin señal, distinto de una lectura que si vino y esta sana.
+    snapshot = _snapshot(disk_available=False, disks=())
+    señales = normalize_snapshot(snapshot, **UMBRALES)
+    assert not [s for s in señales if s.signal_type is SignalType.DISK_FULL]
+
+
+# ----------------------------------------------------------------------- memoria
 
 
 def test_memoria_baja_cruza():
@@ -88,26 +142,59 @@ def test_memoria_suficiente_no_cruza():
     assert señal.crossed is False
 
 
+# ------------------------------------------------------------------------ puertos
+
+
 def test_puerto_caido_cuando_no_esta_escuchando():
     snapshot = _snapshot(ports=(ListeningPort(address="0.0.0.0", port=22),))
-    umbrales = dict(UMBRALES, monitored_ports=frozenset({22, 5432}))
+    umbrales = dict(
+        UMBRALES,
+        monitored_ports=(
+            MonitoredPort(port=22, service="sshd.service"),
+            MonitoredPort(port=5432, service="postgresql.service"),
+        ),
+    )
     señales = {s.key: s for s in normalize_snapshot(snapshot, **umbrales)}
-    assert señales["port:22"].crossed is False
-    assert señales["port:5432"].crossed is True
+    assert señales["port:22:down"].crossed is False
+    assert señales["port:5432:down"].crossed is True
 
 
-def test_categoria_no_disponible_no_emite_señal_sana():
-    # Un df que fallo no debe traducirse en "0% de uso, todo bien": debe
-    # quedar sin señal, distinto de una lectura que si vino y esta sana.
-    snapshot = _snapshot(disk_available=False, disks=())
-    señales = normalize_snapshot(snapshot, **UMBRALES)
-    assert not [s for s in señales if s.signal_type is SignalType.DISK_FULL]
+def test_puerto_ocupado_por_otro_cuando_el_servicio_esperado_no_esta_activo():
+    # Alguien escucha en :5432, pero postgresql.service está caído: no es
+    # "sano" (port_down no cruza porque hay listener) ni es postgresql quien
+    # lo tiene -- eso es port_occupied, no port_down.
+    snapshot = _snapshot(
+        ports=(ListeningPort(address="0.0.0.0", port=5432),),
+        service_states=(ServiceState(name="postgresql.service", active=False),),
+    )
+    umbrales = dict(UMBRALES, monitored_ports=(MonitoredPort(port=5432, service="postgresql.service"),))
+    señales = {s.key: s for s in normalize_snapshot(snapshot, **umbrales)}
+    assert señales["port:5432:down"].crossed is False  # alguien escucha
+    assert señales["port:5432:occupied"].crossed is True  # pero no es postgresql
 
 
-def test_servicios_no_disponibles_no_emite_señal():
-    snapshot = _snapshot(services_available=False, failed_services=())
-    señales = normalize_snapshot(snapshot, **UMBRALES)
-    assert not [s for s in señales if s.signal_type is SignalType.SERVICE_FAILED]
+def test_puerto_sano_cuando_el_servicio_esperado_esta_activo():
+    snapshot = _snapshot(
+        ports=(ListeningPort(address="0.0.0.0", port=5432),),
+        service_states=(ServiceState(name="postgresql.service", active=True),),
+    )
+    umbrales = dict(UMBRALES, monitored_ports=(MonitoredPort(port=5432, service="postgresql.service"),))
+    señales = {s.key: s for s in normalize_snapshot(snapshot, **umbrales)}
+    assert señales["port:5432:down"].crossed is False
+    assert señales["port:5432:occupied"].crossed is False
+
+
+def test_puerto_ocupado_no_se_declara_sin_estado_del_servicio():
+    # El puerto tiene listener, pero el servicio esperado no está en
+    # service_states (no vigilado, o la consulta falló): sin esa base no se
+    # declara ocupación indebida.
+    snapshot = _snapshot(ports=(ListeningPort(address="0.0.0.0", port=5432),))
+    umbrales = dict(UMBRALES, monitored_ports=(MonitoredPort(port=5432, service="postgresql.service"),))
+    señales = {s.key: s for s in normalize_snapshot(snapshot, **umbrales)}
+    assert señales["port:5432:occupied"].crossed is False
+
+
+# ------------------------------------------------------------------------- carga
 
 
 def test_carga_nunca_se_convierte_en_señal():
