@@ -130,6 +130,15 @@ else
     "$REPO/instalador/config.toml.example" "$CONFIG_DIR/config.toml"
   info "config.toml creado desde la plantilla"
 fi
+# Aunque ya existiera, se reafirman dueño y permisos sin tocar el contenido
+# (hallazgo de auditoría, 2026-09-01): comun.sh ahora falla cerrado si
+# config.toml no es exactamente root-owned y no escribible por grupo/otros
+# (defensa contra fabricar la política que ve un script que corre como
+# root, hallazgo #1-bis) -- si algo dejó esos permisos mal en una
+# reinstalación anterior, Modo 2 se rompería en silencio hasta que alguien
+# lo notara a mano. Reinstalar debe dejarlos correctos siempre.
+chown root:"$SERVICE_USER" "$CONFIG_DIR/config.toml"
+chmod 0640 "$CONFIG_DIR/config.toml"
 
 if [[ -f "$CONFIG_DIR/.env" ]]; then
   info ".env ya existe, se conserva sin cambios"
