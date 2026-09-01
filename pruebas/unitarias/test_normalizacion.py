@@ -22,7 +22,12 @@ from doctorjk.monitor import normalize_snapshot
 
 MARCA_DE_TIEMPO = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
 
-UMBRALES = dict(disk_pct_threshold=90, memory_available_mb_threshold=400, monitored_ports=())
+UMBRALES = dict(
+    disk_pct_threshold=90,
+    memory_available_mb_threshold=400,
+    monitored_ports=(),
+    monitored_mount_points=("/",),
+)
 
 
 def _snapshot(**overrides) -> SystemSnapshot:
@@ -100,13 +105,17 @@ def test_service_states_no_disponible_no_emite_señal():
 
 
 def test_disco_cruzado_y_no_cruzado_en_la_misma_lectura():
+    # Ambos mounts vigilados a propósito acá -- lo que se prueba es que las
+    # señales de dos mounts distintos no se confunden entre sí, no el
+    # filtro de vigilancia (que tiene sus propias pruebas más abajo).
     snapshot = _snapshot(
         disks=(
             DiskUsage(source="/dev/sda1", usage_percent=97, target="/"),
             DiskUsage(source="tmpfs", usage_percent=10, target="/dev/shm"),
         )
     )
-    señales = {s.key: s for s in normalize_snapshot(snapshot, **UMBRALES)}
+    umbrales = dict(UMBRALES, monitored_mount_points=("/", "/dev/shm"))
+    señales = {s.key: s for s in normalize_snapshot(snapshot, **umbrales)}
     assert señales["disk:/"].crossed is True
     assert señales["disk:/dev/shm"].crossed is False
 
@@ -117,6 +126,48 @@ def test_categoria_no_disponible_no_emite_señal_sana():
     snapshot = _snapshot(disk_available=False, disks=())
     señales = normalize_snapshot(snapshot, **UMBRALES)
     assert not [s for s in señales if s.signal_type is SignalType.DISK_FULL]
+
+
+def test_mount_no_vigilado_no_emite_señal():
+    # Hallazgo de auditoría (2026-09-01): /boot y /boot/efi cruzando un
+    # umbral bajo no deben generar disk_full si nunca se pidió vigilarlos
+    # -- el filtro de puntos_montaje_vigilados, con el default ["/"], deja
+    # afuera cualquier mount que no sea la raíz.
+    snapshot = _snapshot(
+        disks=(
+            DiskUsage(source="/dev/sda1", usage_percent=3, target="/"),
+            DiskUsage(source="/dev/sda16", usage_percent=22, target="/boot"),
+            DiskUsage(source="/dev/sda15", usage_percent=7, target="/boot/efi"),
+            DiskUsage(source="efivarfs", usage_percent=6, target="/sys/firmware/efi/efivars"),
+        )
+    )
+    señales = {
+        s.key: s
+        for s in normalize_snapshot(snapshot, **UMBRALES)  # default: solo "/"
+        if s.signal_type is SignalType.DISK_FULL
+    }
+    assert set(señales) == {"disk:/"}
+    assert señales["disk:/"].crossed is False
+
+
+def test_mount_extra_vigilado_si_se_configura():
+    # La otra mitad del mismo hallazgo: si el cliente agrega /boot a
+    # puntos_montaje_vigilados, Modo 1 sí lo vigila (aunque Modo 2 --
+    # fix_disco.sh -- siga acotado a "/", eso es una limitación aparte).
+    snapshot = _snapshot(
+        disks=(
+            DiskUsage(source="/dev/sda1", usage_percent=3, target="/"),
+            DiskUsage(source="/dev/sda16", usage_percent=97, target="/boot"),
+        )
+    )
+    umbrales = dict(UMBRALES, monitored_mount_points=("/", "/boot"))
+    señales = {
+        s.key: s
+        for s in normalize_snapshot(snapshot, **umbrales)
+        if s.signal_type is SignalType.DISK_FULL
+    }
+    assert set(señales) == {"disk:/", "disk:/boot"}
+    assert señales["disk:/boot"].crossed is True
 
 
 # ----------------------------------------------------------------------- memoria

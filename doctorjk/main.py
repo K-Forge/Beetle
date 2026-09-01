@@ -331,6 +331,7 @@ def build_incident_pipeline(
             disk_pct_threshold=config.disk_pct_threshold,
             memory_available_mb_threshold=config.memory_available_mb_threshold,
             monitored_ports=config.monitored_ports,
+            monitored_mount_points=config.monitored_mount_points,
         )
         for transition in detector.evaluate(signals, snapshot.captured_at):
             if transition.new_state is IncidentState.INCIDENT and transition.incident is not None:

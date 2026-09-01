@@ -52,6 +52,7 @@ intervalo_monitor_s = 30
 ciclos_persistencia = 2
 enfriamiento_ciclos = 2
 disco_pct = 90
+puntos_montaje_vigilados = ["/"]
 memoria_disponible_mb = 512
 puerto_timeout_s = 60
 servicio_ciclos = 2
@@ -289,6 +290,7 @@ def _config_de_prueba(tmp_path, **overrides):
         persistence_cycles=2,
         cooldown_cycles=2,
         disk_pct_threshold=90,
+        monitored_mount_points=("/",),
         memory_available_mb_threshold=512,
         port_timeout_s=60.0,
         service_cycles=2,

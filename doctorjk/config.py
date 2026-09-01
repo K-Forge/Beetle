@@ -50,6 +50,22 @@ class AppConfig:
     persistence_cycles: int
     cooldown_cycles: int
     disk_pct_threshold: int
+    # Puntos de montaje que el detector evalúa contra disk_pct_threshold
+    # (hallazgo de auditoría, 2026-09-01): antes, normalize_snapshot()
+    # emitía una señal disk_full por CADA mount que reportara `df`, sin
+    # filtrar -- en un umbral bajo (como el usado para provocar disk_full
+    # en las pruebas del VPS), particiones pequeñas y ajenas al agente
+    # (/boot, /boot/efi, efivars) terminaban disparando incidentes no
+    # planeados. Default fail-closed y útil: solo "/" -- nunca vacío
+    # (una lista vacía apagaría el disk_full de Modo 1 en silencio, una
+    # regresión, no una opción segura). Un cliente con /var en un
+    # filesystem separado puede agregarlo acá para que Modo 1 lo vigile
+    # también -- pero fix_disco.sh (Modo 2) sigue acotado a "/" nada más
+    # (plan-finalizacion-mvp.md §4.2); vigilar un mount extra en Modo 1
+    # sin ampliar fix_disco.sh deja ese mount diagnosticado pero nunca
+    # remediado automáticamente, y eso debe quedar documentado, no
+    # asumido.
+    monitored_mount_points: tuple[str, ...]
     memory_available_mb_threshold: int
     port_timeout_s: float
     service_cycles: int
@@ -137,6 +153,42 @@ def _absolute_directory(key_name: str) -> _Validator:
                 f"'{key_name}' debe ser una ruta absoluta, se recibió {value!r}"
             )
         return resolved_path
+
+    return validate
+
+
+def _monitored_mount_points_list(key_name: str) -> _Validator:
+    def validate(value: object) -> object:
+        if not isinstance(value, list) or not value:
+            raise ConfigError(
+                f"'{key_name}' debe ser una lista no vacía de rutas absolutas, "
+                f"se recibió {value!r}"
+            )
+        seen: set[str] = set()
+        mounts: list[str] = []
+        for entry in value:
+            if not isinstance(entry, str) or not entry.strip():
+                raise ConfigError(
+                    f"'{key_name}' contiene una ruta inválida: {entry!r}"
+                )
+            candidate = Path(entry)
+            if not candidate.is_absolute():
+                raise ConfigError(
+                    f"'{key_name}' debe contener rutas absolutas, se recibió {entry!r}"
+                )
+            if ".." in candidate.parts:
+                raise ConfigError(
+                    f"'{key_name}' no admite '..' en una ruta: {entry!r}"
+                )
+            # Path() ya normaliza barras dobles y una barra final (p. ej.
+            # "/boot/" -> "/boot"); comparar sobre esa forma normalizada es
+            # lo que permite detectar duplicados equivalentes.
+            normalized = candidate.as_posix()
+            if normalized in seen:
+                raise ConfigError(f"'{key_name}' tiene la ruta duplicada: {entry!r}")
+            seen.add(normalized)
+            mounts.append(normalized)
+        return tuple(mounts)
 
     return validate
 
@@ -294,6 +346,10 @@ _SCHEMA: dict[str, tuple[str, _Validator]] = {
         _positive_number("enfriamiento_ciclos", (int,)),
     ),
     "disco_pct": ("disk_pct_threshold", _percentage("disco_pct")),
+    "puntos_montaje_vigilados": (
+        "monitored_mount_points",
+        _monitored_mount_points_list("puntos_montaje_vigilados"),
+    ),
     "memoria_disponible_mb": (
         "memory_available_mb_threshold",
         _positive_number("memoria_disponible_mb", (int,)),
@@ -391,6 +447,7 @@ def load_config(path: Path) -> AppConfig:
         persistence_cycles=values["persistence_cycles"],
         cooldown_cycles=values["cooldown_cycles"],
         disk_pct_threshold=values["disk_pct_threshold"],
+        monitored_mount_points=values["monitored_mount_points"],
         memory_available_mb_threshold=values["memory_available_mb_threshold"],
         port_timeout_s=values["port_timeout_s"],
         service_cycles=values["service_cycles"],

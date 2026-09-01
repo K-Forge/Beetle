@@ -18,6 +18,17 @@ enfriamiento_ciclos = 2
 # Porcentaje de uso de disco a partir del cual se considera "disco lleno".
 disco_pct = 90
 
+# Puntos de montaje que se evalúan contra disco_pct. `df` reporta TODOS los
+# filesystems montados (incluidos /boot, /boot/efi o particiones EFI ajenas
+# al agente); sin esta lista, un disco_pct bajo puede disparar disk_full
+# sobre particiones pequeñas que nadie pidió vigilar. Por default, solo la
+# raíz -- nunca vacía (dejarla vacía apagaría el disk_full de Modo 1 por
+# completo). Agregar un mount propio (p. ej. "/var" en un servidor con /var
+# separado) lo suma a Modo 1 (diagnóstico), pero fix_disco.sh (Modo 2) sigue
+# acotado a "/" nada más -- ese mount extra queda diagnosticado, nunca
+# remediado automáticamente.
+puntos_montaje_vigilados = ["/"]
+
 # Memoria disponible mínima, en MB, antes de considerar "memoria baja".
 memoria_disponible_mb = 512
 

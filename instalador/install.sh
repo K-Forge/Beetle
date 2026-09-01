@@ -134,10 +134,11 @@ else
     "$REPO/instalador/config.toml.example" "$CONFIG_DIR/config.toml"
   info "config.toml creado desde la plantilla"
 fi
-# Migración aditiva de claves nuevas (hallazgo de auditoría, 2026-09-01):
-# Gate 4 agregó claves a config.toml (unidad_memoria_aprobada,
-# ocupantes_puerto_aprobados) que un config.toml de una instalación previa
-# a Gate 4 no tiene. load_config() es estricto -- cualquier clave del
+# Migración aditiva de claves nuevas (hallazgo de auditoría, 2026-09-01,
+# ampliado el mismo día tras un hallazgo en ejecución real): Gate 4 agregó
+# claves a config.toml (unidad_memoria_aprobada, ocupantes_puerto_aprobados,
+# y luego puntos_montaje_vigilados) que un config.toml de una instalación
+# previa no tiene. load_config() es estricto -- cualquier clave del
 # esquema ausente del archivo se rechaza (CONTEXTO-IA.md §8.1, "fail
 # fast") -- así que sin esto, reinstalar Gate 4 sobre una config.toml
 # vieja deja el archivo tal cual (rama de arriba, "se conserva sin
@@ -146,13 +147,16 @@ fi
 #
 # Trade-off asumido: el default agregado es SIEMPRE el más restrictivo
 # (fail-closed) de cada clave -- "" para la unidad de memoria, "[]" para
-# ocupantes de puerto -- nunca una suposición sobre qué unidad sería
-# segura de reiniciar o detener en la máquina del cliente. Eso es una
-# decisión de producto que solo el cliente puede tomar editando
-# config.toml después; la migración no la toma por él. Cada clave se
-# agrega SOLO si falta (grep exacto antes de escribir), nunca se
-# sobrescribe ni se reordena una línea existente, y correr esto dos veces
-# no duplica nada -- la segunda vez el grep ya la encuentra.
+# ocupantes de puerto -- excepto puntos_montaje_vigilados, donde una lista
+# vacía NO sería fail-closed sino una regresión silenciosa (apagaría
+# disk_full de Modo 1 para todo el servidor); ahí el default seguro Y útil
+# es ["/"], la raíz nada más. Ninguno de los tres es una suposición sobre
+# qué otra cosa sería segura en la máquina del cliente -- esa sigue siendo
+# una decisión de producto que solo el cliente toma editando config.toml
+# después. Cada clave se agrega SOLO si falta (grep exacto antes de
+# escribir), nunca se sobrescribe ni se reordena una línea existente, y
+# correr esto dos veces no duplica nada -- la segunda vez el grep ya la
+# encuentra.
 step "Migrando config.toml (claves nuevas desde la última instalación, si faltan)"
 _migrar_clave_config_faltante() {
   local clave="$1" linea_default="$2"
@@ -164,6 +168,7 @@ _migrar_clave_config_faltante() {
 }
 _migrar_clave_config_faltante "unidad_memoria_aprobada" 'unidad_memoria_aprobada = ""'
 _migrar_clave_config_faltante "ocupantes_puerto_aprobados" 'ocupantes_puerto_aprobados = []'
+_migrar_clave_config_faltante "puntos_montaje_vigilados" 'puntos_montaje_vigilados = ["/"]'
 # Aunque ya existiera (o se acabe de migrar), se reafirman dueño y
 # permisos sin tocar el contenido (hallazgo de auditoría, 2026-09-01):
 # comun.sh ahora falla cerrado si config.toml no es exactamente root-owned
@@ -185,8 +190,14 @@ chmod 0640 "$CONFIG_DIR/config.toml"
 # systemd: si no carga, el instalador aborta dejando el proceso anterior
 # (si lo había) corriendo sin tocar, en vez de reiniciarlo con una config
 # rota.
+# "-I" (modo aislado, mismo motivo que comun.sh -- ver esa cabecera):
+# ignora PYTHONPATH/PYTHONHOME y el site-packages de usuario, sin afectar
+# el propio site-packages del venv (eso lo resuelve el intérprete por su
+# ruta, no por variables de entorno). Ya corriendo como root en este punto
+# de la instalación, no hay razón para resolver imports desde algo que un
+# proceso sin privilegios pueda haber dejado en esas rutas.
 step "Validando config.toml"
-if ! "$PREFIX/venv/bin/python3" -c '
+if ! "$PREFIX/venv/bin/python3" -I -c '
 import sys
 from pathlib import Path
 from doctorjk.config import load_config

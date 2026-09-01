@@ -278,6 +278,7 @@ def normalize_snapshot(
     disk_pct_threshold: int,
     memory_available_mb_threshold: int,
     monitored_ports: tuple[MonitoredPort, ...],
+    monitored_mount_points: tuple[str, ...],
 ) -> tuple[Signal, ...]:
     """Convierte un SystemSnapshot a Signal (contrato de la tarea #173).
 
@@ -309,9 +310,18 @@ def normalize_snapshot(
                 )
             )
 
-    # Disco: una señal por punto de montaje, cruzada o no según el umbral.
+    # Disco: una señal por punto de montaje vigilado, cruzada o no según el
+    # umbral (hallazgo de auditoría, 2026-09-01). `df` reporta TODOS los
+    # filesystems montados, incluidos los que no son responsabilidad del
+    # agente (/boot, /boot/efi, efivars); sin este filtro, un umbral bajo
+    # dispara disk_full sobre particiones ajenas y pequeñas que ningún
+    # cliente pidió vigilar. La recolección (`df`) no cambia -- se sigue
+    # leyendo todo -- solo se filtra acá cuáles targets producen señal.
+    monitored_targets = set(monitored_mount_points)
     if snapshot.disk_available:
         for disk_reading in snapshot.disks:
+            if disk_reading.target not in monitored_targets:
+                continue
             signals.append(
                 Signal(
                     timestamp=timestamp,

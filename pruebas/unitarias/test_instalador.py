@@ -117,10 +117,10 @@ def test_install_sh_reafirma_permisos_de_config_toml_en_cada_corrida():
 #
 # Hallazgo de auditoría (2026-09-01): install.sh preserva config.toml
 # existente sin tocarlo ("se conserva sin cambios"), pero Gate 4 agregó
-# claves nuevas al esquema (unidad_memoria_aprobada, luego
-# ocupantes_puerto_aprobados) que un config.toml de antes de Gate 4 no
-# tiene -- verificado en git log (1cb7698 agrega servicios_vigilados/
-# puertos_vigilados sin ninguna de las dos; 0f333f8, el commit siguiente,
+# claves nuevas al esquema (unidad_memoria_aprobada, ocupantes_puerto_aprobados,
+# y luego puntos_montaje_vigilados) que un config.toml de antes de Gate 4
+# no tiene -- verificado en git log (1cb7698 agrega servicios_vigilados/
+# puertos_vigilados sin ninguna de las tres; 0f333f8, el commit siguiente,
 # agrega recién unidad_memoria_aprobada). Sin migración, reinstalar Gate 4
 # sobre esa config deja el archivo intacto y el primer restart de
 # doctorjk.service revienta con ConfigError -- load_config() es estricto,
@@ -128,7 +128,7 @@ def test_install_sh_reafirma_permisos_de_config_toml_en_cada_corrida():
 #
 # Estas pruebas ejecutan la función de migración REAL extraída de
 # install.sh (no una reimplementación de prueba) contra un fixture con el
-# esquema real de Gate 3 -- config.toml sin ninguna de las dos claves --
+# esquema real de Gate 3 -- config.toml sin ninguna de las tres claves --
 # y validan el resultado con el parser real (doctorjk.config.load_config).
 
 _GATE3_FIXTURE_TOML = """\
@@ -154,8 +154,9 @@ llm_modelo = "gpt-oss-120b"
 llm_timeout_s = 30
 llm_cache = false
 """
-# A propósito, SIN unidad_memoria_aprobada ni ocupantes_puerto_aprobados:
-# así era el esquema real de Gate 3, antes de que Gate 4 agregara Modo 2.
+# A propósito, SIN unidad_memoria_aprobada, ocupantes_puerto_aprobados ni
+# puntos_montaje_vigilados: así era el esquema real de Gate 3, antes de
+# que Gate 4 agregara Modo 2 (y luego el filtro de mount points).
 
 
 def _extraer_funcion_migracion() -> str:
@@ -170,7 +171,7 @@ def _extraer_funcion_migracion() -> str:
 
 def _extraer_llamadas_migracion() -> str:
     llamadas = re.findall(r"^_migrar_clave_config_faltante .*$", INSTALL_SH, re.MULTILINE)
-    assert len(llamadas) == 2, f"esperaba 2 llamadas de migración, encontré {len(llamadas)}"
+    assert len(llamadas) == 3, f"esperaba 3 llamadas de migración, encontré {len(llamadas)}"
     return "\n".join(llamadas)
 
 
@@ -202,10 +203,12 @@ def test_migracion_agrega_claves_gate4_faltantes_a_config_gate3(tmp_path: Path):
     assert contenido_original in contenido_migrado, "no debe tocar ninguna línea existente"
     assert 'unidad_memoria_aprobada = ""' in contenido_migrado
     assert "ocupantes_puerto_aprobados = []" in contenido_migrado
+    assert 'puntos_montaje_vigilados = ["/"]' in contenido_migrado
 
     config = load_config(ruta)
     assert config.approved_memory_unit == ""
     assert config.approved_port_occupants == ()
+    assert config.monitored_mount_points == ("/",)
 
 
 def test_migracion_es_idempotente_no_duplica_en_dos_corridas(tmp_path: Path):
@@ -223,18 +226,21 @@ def test_migracion_es_idempotente_no_duplica_en_dos_corridas(tmp_path: Path):
     assert tras_primera == tras_segunda, "una segunda corrida no debe cambiar nada más"
     assert tras_segunda.count("unidad_memoria_aprobada") == 1
     assert tras_segunda.count("ocupantes_puerto_aprobados") == 1
+    assert tras_segunda.count("puntos_montaje_vigilados") == 1
 
     config = load_config(ruta)
     assert config.approved_memory_unit == ""
     assert config.approved_port_occupants == ()
+    assert config.monitored_mount_points == ("/",)
 
 
-def test_migracion_no_toca_una_config_que_ya_tiene_ambas_claves(tmp_path: Path):
+def test_migracion_no_toca_una_config_que_ya_tiene_las_tres_claves(tmp_path: Path):
     # Con valores no-default a propósito: si la migración las pisara con
     # el default, este test lo detectaría.
     contenido = _GATE3_FIXTURE_TOML + (
         'unidad_memoria_aprobada = "appcarga.service"\n'
         'ocupantes_puerto_aprobados = ["appcarga.service"]\n'
+        'puntos_montaje_vigilados = ["/", "/var"]\n'
     )
     ruta = tmp_path / "config.toml"
     ruta.write_text(contenido, encoding="utf-8")
@@ -246,6 +252,7 @@ def test_migracion_no_toca_una_config_que_ya_tiene_ambas_claves(tmp_path: Path):
     config = load_config(ruta)
     assert config.approved_memory_unit == "appcarga.service"
     assert config.approved_port_occupants == ("appcarga.service",)
+    assert config.monitored_mount_points == ("/", "/var")
 
 
 # ------------------------------------- validación real de config.toml antes
@@ -262,12 +269,20 @@ def test_migracion_no_toca_una_config_que_ya_tiene_ambas_claves(tmp_path: Path):
 
 def _extraer_validacion_config() -> str:
     match = re.search(
-        r"if ! \"\$PREFIX/venv/bin/python3\" -c '\n(.*?)\n' \"\$CONFIG_DIR/config\.toml\"; then",
+        r"if ! \"\$PREFIX/venv/bin/python3\" -I -c '\n(.*?)\n' \"\$CONFIG_DIR/config\.toml\"; then",
         INSTALL_SH,
         re.DOTALL,
     )
     assert match is not None, "no encontré el bloque de validación de config.toml en install.sh"
     return match.group(1)
+
+
+def test_install_sh_valida_config_con_modo_aislado():
+    # -I (mismo motivo que comun.sh, ver esa cabecera): ya corriendo como
+    # root en este punto de la instalación, no debe resolver imports desde
+    # PYTHONPATH/site de usuario -- pero sí debe seguir viendo el propio
+    # site-packages del venv, que no depende de esas variables.
+    assert '"$PREFIX/venv/bin/python3" -I -c' in INSTALL_SH
 
 
 def _validar_config(config_path: Path) -> subprocess.CompletedProcess[str]:
@@ -315,6 +330,7 @@ def test_install_sh_valida_config_invalida_falla_sin_reiniciar(tmp_path: Path):
     contenido_invalido = _GATE3_FIXTURE_TOML.replace("disco_pct = 90", "disco_pct = 150") + (
         'unidad_memoria_aprobada = ""\n'
         'ocupantes_puerto_aprobados = []\n'
+        'puntos_montaje_vigilados = ["/"]\n'
     )
     ruta = tmp_path / "config.toml"
     ruta.write_text(contenido_invalido, encoding="utf-8")

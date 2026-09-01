@@ -14,6 +14,7 @@ intervalo_monitor_s = 30
 ciclos_persistencia = 2
 enfriamiento_ciclos = 2
 disco_pct = 90
+puntos_montaje_vigilados = ["/"]
 memoria_disponible_mb = 512
 puerto_timeout_s = 60
 servicio_ciclos = 2
@@ -50,6 +51,7 @@ def test_config_valida_produce_appconfig_tipado(tmp_path):
     assert config.persistence_cycles == 2
     assert config.cooldown_cycles == 2
     assert config.disk_pct_threshold == 90
+    assert config.monitored_mount_points == ("/",)
     assert config.memory_available_mb_threshold == 512
     assert config.port_timeout_s == 60
     assert config.service_cycles == 2
@@ -311,3 +313,72 @@ def test_ocupantes_puerto_aprobados_independiente_de_servicios_vigilados(tmp_pat
     config = load_config(ruta)
     assert "doctorjk-test-occupier.service" in config.approved_port_occupants
     assert "doctorjk-test-occupier.service" not in config.monitored_services
+
+
+# ---------------------------------------------------- puntos_montaje_vigilados
+
+
+def test_puntos_montaje_vigilados_default_es_solo_raiz(tmp_path):
+    ruta = _escribir(tmp_path, TOML_VALIDO)
+    assert load_config(ruta).monitored_mount_points == ("/",)
+
+
+def test_puntos_montaje_vigilados_vacio_falla(tmp_path):
+    # A diferencia de ocupantes_puerto_aprobados, acá una lista vacía NO es
+    # un default seguro: apagaría el disk_full de Modo 1 para todo el
+    # servidor en silencio, una regresión, no una opción fail-closed.
+    contenido = TOML_VALIDO.replace('puntos_montaje_vigilados = ["/"]', "puntos_montaje_vigilados = []")
+    ruta = _escribir(tmp_path, contenido)
+    with pytest.raises(ConfigError, match="puntos_montaje_vigilados"):
+        load_config(ruta)
+
+
+def test_puntos_montaje_vigilados_agrega_mount_extra(tmp_path):
+    contenido = TOML_VALIDO.replace(
+        'puntos_montaje_vigilados = ["/"]', 'puntos_montaje_vigilados = ["/", "/var"]'
+    )
+    ruta = _escribir(tmp_path, contenido)
+    assert load_config(ruta).monitored_mount_points == ("/", "/var")
+
+
+def test_puntos_montaje_vigilados_ruta_relativa_falla(tmp_path):
+    contenido = TOML_VALIDO.replace('puntos_montaje_vigilados = ["/"]', 'puntos_montaje_vigilados = ["var"]')
+    ruta = _escribir(tmp_path, contenido)
+    with pytest.raises(ConfigError, match="puntos_montaje_vigilados"):
+        load_config(ruta)
+
+
+def test_puntos_montaje_vigilados_con_puntos_dobles_falla(tmp_path):
+    contenido = TOML_VALIDO.replace(
+        'puntos_montaje_vigilados = ["/"]', 'puntos_montaje_vigilados = ["/var/../etc"]'
+    )
+    ruta = _escribir(tmp_path, contenido)
+    with pytest.raises(ConfigError, match="puntos_montaje_vigilados"):
+        load_config(ruta)
+
+
+def test_puntos_montaje_vigilados_duplicado_falla(tmp_path):
+    contenido = TOML_VALIDO.replace(
+        'puntos_montaje_vigilados = ["/"]', 'puntos_montaje_vigilados = ["/var", "/var"]'
+    )
+    ruta = _escribir(tmp_path, contenido)
+    with pytest.raises(ConfigError, match="puntos_montaje_vigilados"):
+        load_config(ruta)
+
+
+def test_puntos_montaje_vigilados_normaliza_barra_final_como_duplicado(tmp_path):
+    # "/var/" y "/var" son el mismo mount -- deben chocar como duplicado,
+    # no colarse como dos entradas distintas.
+    contenido = TOML_VALIDO.replace(
+        'puntos_montaje_vigilados = ["/"]', 'puntos_montaje_vigilados = ["/var", "/var/"]'
+    )
+    ruta = _escribir(tmp_path, contenido)
+    with pytest.raises(ConfigError, match="puntos_montaje_vigilados"):
+        load_config(ruta)
+
+
+def test_puntos_montaje_vigilados_no_es_lista_falla(tmp_path):
+    contenido = TOML_VALIDO.replace('puntos_montaje_vigilados = ["/"]', 'puntos_montaje_vigilados = "/"')
+    ruta = _escribir(tmp_path, contenido)
+    with pytest.raises(ConfigError, match="puntos_montaje_vigilados"):
+        load_config(ruta)
