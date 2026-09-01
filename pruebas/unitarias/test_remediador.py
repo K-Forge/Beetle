@@ -1,0 +1,182 @@
+# Pruebas del remediador (tareas #199-202, plan-finalizacion-mvp.md Gate 4.3).
+# Los scripts son dobles de bash escritos a tmp_path: lo que se prueba es la
+# orquestación (opt-in, mapeo, timeout, saneo de salida), no scripts-fix/ en
+# sí, que tiene sus propias pruebas de shellcheck/bash -n.
+from __future__ import annotations
+
+import stat
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
+
+from doctorjk.config import AppConfig, RemediationMode
+from doctorjk.modelos import Incident, IncidentState, RemediationOutcome, SignalType
+from doctorjk.remediador import remediate
+
+AHORA = datetime(2026, 8, 26, tzinfo=timezone.utc)
+
+
+def _config(tmp_path: Path, **overrides) -> AppConfig:
+    base = dict(
+        monitor_interval_s=30.0,
+        persistence_cycles=2,
+        cooldown_cycles=2,
+        disk_pct_threshold=90,
+        memory_available_mb_threshold=512,
+        port_timeout_s=60.0,
+        service_cycles=2,
+        port_cycles=2,
+        monitored_services=("postgresql.service",),
+        monitored_ports=(),
+        approved_memory_unit="",
+        reports_dir=tmp_path,
+        remediation_mode=RemediationMode.SCRIPTS,
+        auto_fix=True,
+        dry_run=False,
+        command_timeout_s=5.0,
+        llm_url="https://proveedor/v1",
+        llm_model="gpt-oss-120b",
+        llm_timeout_s=5.0,
+        llm_cache=False,
+        llm_api_key="k",
+    )
+    base.update(overrides)
+    return AppConfig(**base)
+
+
+def _incidente(signal_type: SignalType, resource_key: str) -> Incident:
+    return Incident(
+        incident_id="inc-remediar",
+        signal_type=signal_type,
+        resource_key=resource_key,
+        started_at=AHORA,
+        confirmed_at=AHORA,
+        state=IncidentState.INCIDENT,
+    )
+
+
+def _instalar_script(scripts_dir: Path, nombre: str, contenido: str) -> None:
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    ruta = scripts_dir / nombre
+    ruta.write_text(contenido, encoding="utf-8")
+    ruta.chmod(ruta.stat().st_mode | stat.S_IEXEC)
+
+
+# --------------------------------------------------------- salvaguardas de opt-in
+
+
+def test_sin_modo_scripts_no_ejecuta_nada(tmp_path):
+    config = _config(tmp_path, remediation_mode=RemediationMode.DIAGNOSTIC)
+    resultado = remediate(_incidente(SignalType.DISK_FULL, "disk:/"), config, tmp_path)
+    assert resultado.outcome is RemediationOutcome.NOT_ENABLED
+    assert resultado.script is None
+
+
+def test_sin_auto_fix_no_ejecuta_nada(tmp_path):
+    config = _config(tmp_path, auto_fix=False, dry_run=True)
+    resultado = remediate(_incidente(SignalType.DISK_FULL, "disk:/"), config, tmp_path)
+    assert resultado.outcome is RemediationOutcome.NOT_ENABLED
+
+
+def test_tipo_sin_script_no_ejecuta_nada(tmp_path):
+    config = _config(tmp_path)
+    resultado = remediate(_incidente(SignalType.PORT_DOWN, "port:22:down"), config, tmp_path)
+    assert resultado.outcome is RemediationOutcome.NOT_MAPPED
+    assert resultado.script is None
+
+
+# ------------------------------------------------------------------- ejecución
+
+
+def test_script_exitoso_se_marca_resuelto(tmp_path):
+    _instalar_script(
+        tmp_path,
+        "fix_disco.sh",
+        "#!/usr/bin/env bash\necho \"limpiando $1\"\nexit 0\n",
+    )
+    config = _config(tmp_path)
+    resultado = remediate(_incidente(SignalType.DISK_FULL, "disk:/var"), config, tmp_path)
+
+    assert resultado.outcome is RemediationOutcome.RESOLVED
+    assert resultado.exit_code == 0
+    assert resultado.script == "fix_disco.sh"
+    assert resultado.argv == (str(tmp_path / "fix_disco.sh"), "/var")
+    assert "limpiando /var" in resultado.stdout
+
+
+def test_script_con_codigo_distinto_de_cero_se_marca_fallido(tmp_path):
+    _instalar_script(
+        tmp_path,
+        "fix_servicio.sh",
+        "#!/usr/bin/env bash\necho 'no arrancó' >&2\nexit 1\n",
+    )
+    config = _config(tmp_path)
+    resultado = remediate(
+        _incidente(SignalType.SERVICE_FAILED, "service:postgresql.service"), config, tmp_path
+    )
+
+    assert resultado.outcome is RemediationOutcome.FAILED
+    assert resultado.exit_code == 1
+    assert "no arrancó" in resultado.stderr
+
+
+def test_script_ausente_se_marca_fallido_sin_lanzar(tmp_path):
+    config = _config(tmp_path)
+    resultado = remediate(
+        _incidente(SignalType.SERVICE_FAILED, "service:postgresql.service"), config, tmp_path
+    )
+    assert resultado.outcome is RemediationOutcome.FAILED
+    assert resultado.exit_code is None
+
+
+def test_script_colgado_agota_el_timeout_y_se_marca_fallido(tmp_path):
+    _instalar_script(tmp_path, "fix_disco.sh", "#!/usr/bin/env bash\nsleep 5\n")
+    config = _config(tmp_path)
+    resultado = remediate(
+        _incidente(SignalType.DISK_FULL, "disk:/"), config, tmp_path, timeout_s=0.2
+    )
+    assert resultado.outcome is RemediationOutcome.FAILED
+    assert "tiempo agotado" in resultado.stderr
+
+
+# ----------------------------------------------------------------- saneo y entorno
+
+
+def test_stdout_stderr_se_sanitizan(tmp_path):
+    _instalar_script(
+        tmp_path,
+        "fix_servicio.sh",
+        "#!/usr/bin/env bash\necho 'conectando a 10.0.0.5' \nexit 0\n",
+    )
+    config = _config(tmp_path)
+    resultado = remediate(
+        _incidente(SignalType.SERVICE_FAILED, "service:postgresql.service"), config, tmp_path
+    )
+    assert "10.0.0.5" not in resultado.stdout
+    assert "[IP_1]" in resultado.stdout
+
+
+def test_variables_de_entorno_reciben_dry_run_y_listas(tmp_path):
+    _instalar_script(
+        tmp_path,
+        "fix_puerto.sh",
+        "#!/usr/bin/env bash\n"
+        'echo "dry_run=$DOCTORJK_DRY_RUN servicios=$DOCTORJK_MONITORED_SERVICES"\n'
+        "exit 0\n",
+    )
+    config = _config(tmp_path, dry_run=False, auto_fix=True, monitored_services=("nginx.service",))
+    resultado = remediate(
+        _incidente(SignalType.PORT_OCCUPIED, "port:80:occupied"), config, tmp_path
+    )
+    assert "dry_run=0" in resultado.stdout
+    assert "servicios=nginx.service" in resultado.stdout
+
+
+def test_target_argument_extrae_el_recurso_del_resource_key(tmp_path):
+    _instalar_script(tmp_path, "fix_puerto.sh", "#!/usr/bin/env bash\nexit 0\n")
+    config = _config(tmp_path)
+    resultado = remediate(
+        _incidente(SignalType.PORT_OCCUPIED, "port:5432:occupied"), config, tmp_path
+    )
+    assert resultado.argv[1] == "5432"
