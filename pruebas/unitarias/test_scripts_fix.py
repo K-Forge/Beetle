@@ -16,10 +16,12 @@ from __future__ import annotations
 import os
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent.parent
 FIX_PUERTO = REPO_ROOT / "scripts-fix" / "fix_puerto.sh"
+FIX_DISCO = REPO_ROOT / "scripts-fix" / "fix_disco.sh"
 
 _FAKE_COMUN_SH = """#!/usr/bin/env bash
 # Doble de prueba de comun.sh -- NO verifica dueño/permisos de nada; la
@@ -173,3 +175,134 @@ def test_fix_puerto_en_dry_run_solo_anuncia_aunque_nadie_escuche(tmp_path: Path)
     assert not (fake_state / "systemctl_calls").exists() or "restart" not in (
         fake_state / "systemctl_calls"
     ).read_text(encoding="utf-8")
+
+
+# --------------------------------------------------------------- fix_disco.sh
+
+_FAKE_DF = """#!/usr/bin/env bash
+# Primera llamada: sobre el umbral (dispara la limpieza). Segunda en
+# adelante: bajo el umbral (simula que la limpieza sí liberó espacio).
+count_file="$FAKE_STATE_DIR/df_calls"
+count=0
+[[ -f "$count_file" ]] && count="$(cat "$count_file")"
+count=$((count + 1))
+echo "$count" > "$count_file"
+echo "Use%"
+if (( count == 1 )); then
+  echo "95%"
+else
+  echo "60%"
+fi
+"""
+
+_FAKE_JOURNALCTL = """#!/usr/bin/env bash
+echo "$*" >> "$FAKE_STATE_DIR/journalctl_calls"
+exit 0
+"""
+
+_FAKE_FIND = """#!/usr/bin/env bash
+# Traduce /var/log al directorio de prueba FAKE_VAR_LOG y delega en el
+# find real -- así fix_disco.sh corre su búsqueda de verdad (mismos
+# argumentos, mismo -print0), solo que contra archivos de prueba, no el
+# filesystem real de la máquina que corre las pruebas.
+args=("$@")
+if [[ "${args[0]}" == "/var/log" ]]; then
+  args[0]="$FAKE_VAR_LOG"
+fi
+exec /usr/bin/find "${args[@]}"
+"""
+
+
+def test_fix_disco_lista_candidatos_antes_de_borrar(tmp_path: Path):
+    # Gate 4.2 exige listar candidatos antes de aplicar la política de
+    # retención; un `find -delete` silencioso no deja ese rastro (hallazgo
+    # de auditoría, 2026-09-01).
+    scripts_dir = tmp_path / "scripts-fix"
+    scripts_dir.mkdir()
+    _instalar(scripts_dir / "comun.sh", _FAKE_COMUN_SH)
+    _instalar(scripts_dir / "fix_disco.sh", FIX_DISCO.read_text(encoding="utf-8"))
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    _instalar(fake_bin / "df", _FAKE_DF)
+    _instalar(fake_bin / "journalctl", _FAKE_JOURNALCTL)
+    _instalar(fake_bin / "find", _FAKE_FIND)
+
+    fake_state = tmp_path / "estado"
+    fake_state.mkdir()
+
+    fake_var_log = tmp_path / "var-log"
+    fake_var_log.mkdir()
+    viejo_rotado = fake_var_log / "app.log.1.gz"
+    viejo_rotado.write_bytes(b"contenido viejo")
+    # mtime de hace 10 dias: debe calzar con -mtime +3.
+    diez_dias = 10 * 24 * 3600
+    os.utime(viejo_rotado, (0, time.time() - diez_dias))
+    log_activo = fake_var_log / "app.log"
+    log_activo.write_text("log activo, no se toca", encoding="utf-8")
+
+    entorno = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_STATE_DIR": str(fake_state),
+        "FAKE_VAR_LOG": str(fake_var_log),
+        "TEST_DRY_RUN": "0",
+        "TEST_DISK_THRESHOLD": "90",
+    }
+
+    resultado = subprocess.run(
+        [str(scripts_dir / "fix_disco.sh"), "/"],
+        capture_output=True,
+        text=True,
+        env=entorno,
+        timeout=10,
+    )
+
+    assert resultado.returncode == 0, resultado.stdout + resultado.stderr
+    assert f"candidato: {viejo_rotado}" in resultado.stdout
+    assert not viejo_rotado.exists(), "el candidato rotado debía eliminarse"
+    assert log_activo.exists(), "un log activo sin rotar nunca se toca"
+    assert f"removed '{viejo_rotado}'" in resultado.stdout  # rm -v confirma el borrado real
+
+
+def test_fix_disco_en_dry_run_no_borra_nada(tmp_path: Path):
+    scripts_dir = tmp_path / "scripts-fix"
+    scripts_dir.mkdir()
+    _instalar(scripts_dir / "comun.sh", _FAKE_COMUN_SH)
+    _instalar(scripts_dir / "fix_disco.sh", FIX_DISCO.read_text(encoding="utf-8"))
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    _instalar(fake_bin / "df", _FAKE_DF)
+    _instalar(fake_bin / "journalctl", _FAKE_JOURNALCTL)
+    _instalar(fake_bin / "find", _FAKE_FIND)
+
+    fake_state = tmp_path / "estado"
+    fake_state.mkdir()
+
+    fake_var_log = tmp_path / "var-log"
+    fake_var_log.mkdir()
+    viejo_rotado = fake_var_log / "app.log.1.gz"
+    viejo_rotado.write_bytes(b"contenido viejo")
+    os.utime(viejo_rotado, (0, time.time() - 10 * 24 * 3600))
+
+    entorno = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_STATE_DIR": str(fake_state),
+        "FAKE_VAR_LOG": str(fake_var_log),
+        "TEST_DRY_RUN": "1",
+        "TEST_DISK_THRESHOLD": "90",
+    }
+
+    resultado = subprocess.run(
+        [str(scripts_dir / "fix_disco.sh"), "/"],
+        capture_output=True,
+        text=True,
+        env=entorno,
+        timeout=10,
+    )
+
+    assert resultado.returncode == 0, resultado.stdout + resultado.stderr
+    assert f"candidato: {viejo_rotado}" in resultado.stdout  # se lista igual
+    assert viejo_rotado.exists(), "dry-run nunca borra de verdad"

@@ -44,7 +44,25 @@ if (( usage <= threshold )); then
 fi
 
 run_or_announce journalctl --vacuum-size=100M
-run_or_announce find /var/log -type f \( -name '*.log.*.gz' -o -name '*.log.[0-9]*' \) -mtime +3 -delete
+
+# Lista los candidatos ANTES de aplicar la política de retención
+# (plan-finalizacion-mvp.md §4.2: "listar candidatos y aplicar política de
+# retención bajo raíces exactas"), en vez de un `find -delete` silencioso
+# que no deja rastro de qué se llevó (hallazgo de auditoría, 2026-09-01).
+mapfile -d '' -t log_candidates < <(
+  find /var/log -type f \( -name '*.log.*.gz' -o -name '*.log.[0-9]*' \) -mtime +3 -print0
+)
+if (( ${#log_candidates[@]} > 0 )); then
+  log "candidatos a eliminar (logs rotados, >3 días): ${#log_candidates[@]}"
+  for candidate in "${log_candidates[@]}"; do
+    log "candidato: $candidate"
+  done
+  # -v: cada archivo realmente eliminado queda en stdout, que el remediador
+  # guarda sanitizado en journald y en el informe (tarea #201).
+  run_or_announce rm -fv -- "${log_candidates[@]}"
+else
+  log "sin candidatos de logs rotados para eliminar"
+fi
 
 if is_dry_run; then
   log "[DRY-RUN] no se verifica postcondición"
