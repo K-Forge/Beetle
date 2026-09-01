@@ -27,7 +27,7 @@ _IPV4_RE = re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]
 _IPV6_RE = re.compile(r"\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}\b")
 
 
-def _parece_fecha_u_hora(candidato: str) -> bool:
+def _looks_like_date_or_time(candidate: str) -> bool:
     """Filtro para el falso positivo más común del patrón IPv6: un timestamp
     de log (p. ej. "2026:12:00:00" dentro de "[25/Aug/2026:12:00:00]" en un
     access log de nginx) calza con la forma de una IPv6 de pocos grupos.
@@ -38,8 +38,8 @@ def _parece_fecha_u_hora(candidato: str) -> bool:
     sin redactar -- posible pero muy inusual en la práctica. Documentado en
     docs/sanitizador_limitaciones.md.
     """
-    partes = candidato.split(":")
-    return len(partes) <= 4 and all(p.isdigit() for p in partes)
+    parts = candidate.split(":")
+    return len(parts) <= 4 and all(p.isdigit() for p in parts)
 
 
 def _redact_ips(text: str) -> str:
@@ -49,19 +49,19 @@ def _redact_ips(text: str) -> str:
     """
     placeholders: dict[str, str] = {}
 
-    def _placeholder_para(ip: str) -> str:
+    def _placeholder_for(ip: str) -> str:
         if ip not in placeholders:
             placeholders[ip] = f"[IP_{len(placeholders) + 1}]"
         return placeholders[ip]
 
-    def _reemplazar_ipv6(match: re.Match[str]) -> str:
-        candidato = match.group(0)
-        if _parece_fecha_u_hora(candidato):
-            return candidato
-        return _placeholder_para(candidato)
+    def _replace_ipv6(match: re.Match[str]) -> str:
+        candidate = match.group(0)
+        if _looks_like_date_or_time(candidate):
+            return candidate
+        return _placeholder_for(candidate)
 
-    text = _IPV6_RE.sub(_reemplazar_ipv6, text)
-    text = _IPV4_RE.sub(lambda m: _placeholder_para(m.group(0)), text)
+    text = _IPV6_RE.sub(_replace_ipv6, text)
+    text = _IPV4_RE.sub(lambda m: _placeholder_for(m.group(0)), text)
     return text
 
 
@@ -76,21 +76,21 @@ _ASSIGNMENT_RE = re.compile(
 _CREDENTIAL_KEYWORDS = frozenset({"PASSWORD", "SECRET", "KEY", "TOKEN"})
 
 
-def _es_variable_credencial(nombre: str) -> bool:
+def _is_credential_variable(name: str) -> bool:
     """Un componente del nombre (separado por "_") debe COINCIDIR con una de
     las palabras clave, no solo contenerla -- así "MONKEY_ISLAND" no se
     confunde con una variable que contiene "KEY" (sobre-redacción)."""
-    return any(parte in _CREDENTIAL_KEYWORDS for parte in nombre.upper().split("_"))
+    return any(part in _CREDENTIAL_KEYWORDS for part in name.upper().split("_"))
 
 
 def _redact_credential_assignments(text: str) -> str:
-    def _reemplazar(match: re.Match[str]) -> str:
-        prefijo, nombre, igual, _valor = match.groups()
-        if not _es_variable_credencial(nombre):
+    def _replace(match: re.Match[str]) -> str:
+        prefix, name, equals, _value = match.groups()
+        if not _is_credential_variable(name):
             return match.group(0)
-        return f"{prefijo}{nombre}{igual}[REDACTADO]"
+        return f"{prefix}{name}{equals}[REDACTADO]"
 
-    return _ASSIGNMENT_RE.sub(_reemplazar, text)
+    return _ASSIGNMENT_RE.sub(_replace, text)
 
 
 # ------------------------------------------------- credenciales dentro de URIs
@@ -165,13 +165,13 @@ def sanitize(text: str) -> str:
     corrido antes; el orden solo evita que una sustitución corte a la mitad
     algo que otro patrón todavía no procesó.
     """
-    resultado = _redact_ssh_keys(text)
-    resultado = _redact_tokens(resultado)
-    resultado = _redact_uri_credentials(resultado)
-    resultado = _redact_credential_assignments(resultado)
-    resultado = _redact_home_paths(resultado)
-    resultado = _redact_ips(resultado)
-    return resultado
+    result = _redact_ssh_keys(text)
+    result = _redact_tokens(result)
+    result = _redact_uri_credentials(result)
+    result = _redact_credential_assignments(result)
+    result = _redact_home_paths(result)
+    result = _redact_ips(result)
+    return result
 
 
 def sanitize_evidence(evidence: Evidence) -> SanitizedEvidence:
