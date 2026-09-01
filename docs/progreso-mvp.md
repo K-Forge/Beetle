@@ -302,3 +302,149 @@ tocar el VPS salvo necesidad real.
 - `fix_memoria.sh` no tiene una unidad aprobada configurada todavía en el
   VPS (`unidad_memoria_aprobada = ""`): antes de probarlo hay que decidir
   qué unidad real del VPS es segura de reiniciar para ese fin.
+
+---
+
+## 9. Gate 4.4 — inventario del VPS y protocolo propuesto (2026-09-01)
+
+**Local aprobado de forma independiente:** 259 tests, `bash -n`, `compileall`
+y `git diff --check` en verde. Este inventario es de **solo lectura**, por
+Tailscale; no se instaló, configuró ni ejecutó nada. Nada de lo que sigue en
+esta sección se ejecutó todavía — es la propuesta a revisar antes de tocar
+el VPS.
+
+### 9.1 Inventario
+
+| Área | Estado |
+|---|---|
+| Conectividad | OK, `beetle@beetle-vps` por Tailscale |
+| Servicios reales | `nginx`, `postgresql@16-main`, `appcarga`, `cron` — los 4 activos |
+| Carga | `0.00 0.00 0.00`, 2 vCPU |
+| Memoria | 11 GiB total, ~8.9 GiB libres, sin swap; ningún proceso individual pasa de 45 MB RSS |
+| Disco | 145G, 4.2G usados (3%), 141G libres |
+| `doctorjk.service` / `doctorjk-trigger.service` | Ambos activos. **`NoNewPrivileges=yes`** — es el código de Gate 3.2, previo a las correcciones de Gate 4; no se ha vuelto a instalar |
+| `/opt/doctorjk` | Existe, sin `scripts-fix/`: Modo 2 nunca se desplegó |
+| `/etc/sudoers.d/doctorjk` | No existe |
+| `config.toml` | `modo_remediacion="diagnostico"`, `auto_fix=false`, `dry_run=true`, `unidad_memoria_aprobada=""` — Modo 2 apagado, tal como se dejó |
+| `.env` | Existe, 600, con contenido (no se leyó el valor) |
+| Informes | Los 4 de Gate 3.2 siguen ahí (`service_failed`×2, `port_down`, `disk_full`, `port_occupied`) |
+| Corrida de 24h (Gate 3.2 §7.2) | **No fue continua.** `doctorjk.service` recibió SIGTERM y se reinició dos veces a las 06:32:50 y 06:33:06 UTC, ~1h después de terminado el trabajo de Gate 3.2. No fue el auto-deploy (`main` sigue en `6166bf9` en el VPS) ni una acción mía. Sin transiciones de incidente en la corrida actual (0 desde el último reinicio, 06:33:24). Origen del reinicio: sin determinar — no se investigó más a fondo en este inventario de solo lectura. |
+
+### 9.2 Protocolo propuesto (nada ejecutado; secuencial, reversible, con cleanup en cada paso)
+
+**Por qué no hace falta un snapshot nuevo:** todo lo de abajo es reversible por
+diseño (instalación idempotente ya probada, provocaciones ya usadas en Gate
+3.2, o acotadas por cgroup) y no hay antecedente de que algo haya fallado de
+forma no recuperable. Se propone no crear uno; se revierte esta decisión si
+algún paso revela lo contrario.
+
+**Paso 0 — Redesplegar el código de Gate 4 (mutación necesaria, reversible)**
+1. Copiar el código actual al VPS por Tailscale (tar, no git — igual que en
+   Gate 3.2; sigue sin pushear nada).
+2. Correr `instalador/install.sh`. Esto va a: actualizar el venv, instalar
+   `scripts-fix/` + generar sudoers (`visudo -cf` + verificación `sudo -n -l`
+   ya integradas), y reinstalar `doctorjk.service` **sin** `NoNewPrivileges`
+   y con `/var/log` en `ReadWritePaths` — el cambio de hardening que Gate 4
+   corrigió en local, ahora sí desplegado.
+3. Verificar: `systemd-analyze verify`, `sudo -n -l` para los 4 scripts,
+   `grep NoNewPrivileges` sobre la unidad instalada (los mismos chequeos que
+   ya tiene `install.sh`), ambas unidades activas.
+4. **Cleanup si algo falla acá:** `instalador/desinstalar.sh` (sin
+   `--delete-data`) revierte todo salvo config/datos, que de por sí no se
+   tocan en este paso.
+
+**Paso 1 — Validar los 4 scripts en DRY-RUN primero (sin auto_fix)**
+
+Aprovecha la corrección de esta sesión: `dry_run=true` ya no exige
+`auto_fix`. Con `modo_remediacion="scripts"`, `auto_fix=false`,
+`dry_run=true`:
+
+1. Provocar cada uno de los 4 incidentes con el mismo método ya probado y
+   reversible de Gate 3.2 (`kill -9` a postgresql, `fallocate` bajo
+   `/var/log` con nombre y antigüedad que sí calcen con el patrón de
+   `fix_disco.sh` — no un archivo fuera de su alcance como en Gate 3.2 — y
+   nginx detenido + ocupante de prueba en :80).
+2. Confirmar en el journal: el script corrió, imprimió `[DRY-RUN]`, y
+   `RemediationResult.outcome == DRY_RUN` en el informe anexado.
+3. Confirmar que NINGÚN estado real cambió (servicio sigue caído, disco
+   sigue lleno, puerto sigue ocupado) — es la prueba de que dry-run no muta.
+4. Cleanup: restaurar cada recurso a mano (mismo procedimiento que Gate 3.2)
+   antes de pasar al siguiente escenario.
+
+**Paso 2 — Validar cada script con ejecución real (`auto_fix=true`,
+`dry_run=false`), uno a la vez, con cleanup entre cada uno**
+
+*(a) `fix_servicio.sh`* — matar `postgresql@16-main` con `kill -9` (idéntico
+a Gate 3.2). Confirmar remediación real (postgresql vuelve a `active`),
+informe con `RESOLVED`. **Idempotencia:** correr el script una segunda vez a
+mano (`sudo -n /opt/doctorjk/scripts-fix/fix_servicio.sh
+postgresql@16-main.service`) con el servicio ya sano — confirmar que sale 0
+de inmediato sin reiniciar nada (rama "ya está activa").
+
+*(b) `fix_disco.sh`* — en vez del archivo bajo `/root` de Gate 3.2 (fuera
+del alcance real del script), crear un archivo que el script sí vaya a
+encontrar: `fallocate` bajo `/var/log` con nombre `*.log.1.gz` y mtime de
+hace 10 días (patrón exacto de `fix_disco.sh`), del tamaño que haga falta
+para cruzar `disco_pct`. Confirmar que el script lo lista como candidato, lo
+borra de verdad, y la postcondición pasa. **Idempotencia:** correr el
+script una segunda vez con el disco ya sano — confirmar "ya está bajo el
+umbral" sin acción.
+
+*(c) `fix_puerto.sh`* — nginx detenido + `systemd-run` con un
+`python3 -m http.server 80` como ocupante de prueba (idéntico a Gate 3.2).
+Confirmar remediación real (nginx recupera el puerto, verificado con `ss`).
+**Idempotencia:** correr el script una segunda vez con nginx ya sano —
+confirmar "ya tiene el puerto" sin acción. Además, repetir el escenario
+pero deteniendo el ocupante de prueba ANTES de correr el script (para
+ejercitar la corrección del hallazgo de "el ocupante ya no está" en el VPS
+real, no solo con dobles).
+
+*(d) `fix_memoria.sh`* — el caso que pide una unidad de prueba acotada por
+cgroup, no un servicio real:
+
+   - Crear una unidad transitoria `doctorjk-test-memhog` vía `systemd-run`
+     con `--property=MemoryMax=1200M` (tope duro que el kernel hace
+     cumplir — el proceso no puede pasarlo pase lo que pase). El comando
+     que corre asigna ~1000 MB una sola vez usando un archivo marcador bajo
+     `/run` para no volver a asignar si se reinicia (así "reiniciar la
+     unidad" sí libera memoria de verdad, en vez de reasignarla de
+     inmediato).
+   - **No se toca `memoria_disponible_mb=512` para esto.** Con 8.9 GiB
+     libres, cruzar ese umbral de verdad exigiría ocupar ~8.4 GiB — el
+     riesgo que ya se descartó en Gate 3.2. En vez de eso, se baja
+     `memoria_disponible_mb` TEMPORALMENTE a un valor pensado para que la
+     asignación de 1000 MB, acotada por el cgroup, alcance a cruzarlo (p.
+     ej. memoria libre actual menos ~700 MB). Se restaura el valor original
+     (512) apenas termina la prueba.
+   - Setear `unidad_memoria_aprobada = "doctorjk-test-memhog"` (temporal,
+     restaurado a `""` al final).
+   - Confirmar: precondición de cgroup pasa (MemoryCurrent de la unidad de
+     prueba cubre el déficit calculado), reinicio real, postcondición pasa
+     (memoria disponible vuelve a estar sobre el umbral). **Idempotencia:**
+     con memoria ya suficiente, correr el script de nuevo — confirmar "ya
+     hay memoria suficiente" sin reiniciar nada.
+   - Cleanup: detener `doctorjk-test-memhog` (`systemctl stop`, se
+     autolimpia por ser transitoria), restaurar `memoria_disponible_mb` y
+     `unidad_memoria_aprobada` a sus valores originales.
+
+**Paso 3 — Tipo no mapeado (`port_down`)**
+
+Detener nginx sin que nada más ocupe el puerto (nadie escuchando en :80 =
+`port_down`, no `port_occupied`). Con Modo 2 en `auto_fix=true`, confirmar
+en el journal: `"sin script de corrección para port_down, queda solo
+diagnosticado"`, `RemediationOutcome.NOT_MAPPED`, y que el informe generado
+NO trae sección "Corrección automática". Cleanup: reiniciar nginx.
+
+**Paso 4 — Apagar Modo 2 y dejar el VPS como se encontró**
+
+`modo_remediacion="diagnostico"`, `auto_fix=false`, `dry_run=true` (los
+valores con los que está hoy). Confirmar servicios activos, disco/memoria
+normales, sin unidades de prueba residuales.
+
+### 9.3 Lo que este protocolo NO hace
+
+- No llama a Cloudflare (Modo 2 es determinista, no usa el LLM).
+- No deja `auto_fix=true` activo al terminar.
+- No crea un snapshot nuevo (§ arriba).
+- No repite pruebas de carga sostenida (`hey`/`wrk`) — no hacen falta para
+  validar Modo 2.
