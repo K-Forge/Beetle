@@ -290,6 +290,27 @@ def test_la_cache_no_guarda_la_credencial(evidencia, config, tmp_path: Path):
         assert "CREDENCIAL-SUPER-SECRETA" not in archivo.name
 
 
+def test_cache_queda_con_permisos_restrictivos(evidencia, config, tmp_path: Path):
+    import stat
+
+    con_cache = LLMConfig(
+        base_url=config.base_url,
+        model=config.model,
+        api_key=config.api_key,
+        cache_enabled=True,
+        cache_dir=tmp_path / "cache",
+    )
+    sesion = SesionFalsa(_respuesta_ok())
+    _, dormir = _esperas()
+
+    diagnose(evidencia, "prompt", con_cache, sesion, sleep=dormir)
+
+    cache_dir = tmp_path / "cache"
+    assert stat.S_IMODE(cache_dir.stat().st_mode) == 0o700
+    (archivo,) = cache_dir.iterdir()
+    assert stat.S_IMODE(archivo.stat().st_mode) == 0o600
+
+
 def test_sin_opt_in_no_se_usa_cache(evidencia, config, tmp_path: Path):
     # La caché es solo-desarrollo: sin activarla explícitamente no debe existir.
     sesion = SesionFalsa(_respuesta_ok())

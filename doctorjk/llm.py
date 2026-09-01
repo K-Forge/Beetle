@@ -93,11 +93,16 @@ def _cache_read(config: LLMConfig, key: str) -> str | None:
 
 
 def _cache_write(config: LLMConfig, key: str, contenido: str) -> None:
+    # La caché guarda diagnósticos ya redactados con evidencia sanitizada,
+    # pero igual queda en disco sin cifrar: 700/600 para que solo el usuario
+    # doctorjk pueda leerla (plan-finalizacion-mvp.md Gate 2.3, punto 7).
     if not config.cache_enabled or config.cache_dir is None:
         return
     try:
-        config.cache_dir.mkdir(parents=True, exist_ok=True)
-        (config.cache_dir / f"{key}.txt").write_text(contenido, encoding="utf-8")
+        config.cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        archivo = config.cache_dir / f"{key}.txt"
+        archivo.write_text(contenido, encoding="utf-8")
+        archivo.chmod(0o600)
     except OSError as error:
         log.warning("no pude escribir la caché: %s", error)
 
