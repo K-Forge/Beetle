@@ -245,6 +245,84 @@ def test_puerto_ocupado_no_se_declara_sin_estado_del_servicio():
     assert señales["port:5432:occupied"].crossed is False
 
 
+# ------------------------ interacción service_failed / port_occupied
+#
+# Hallazgo de auditoría (2026-09-01): con el dueño esperado inactivo Y otro
+# proceso escuchando en su puerto vigilado, la versión anterior emitía
+# SERVICE_FAILED (cruzado) para el dueño Y PORT_OCCUPIED (cruzado) para el
+# mismo puerto en el mismo snapshot. Con servicio_ciclos/puerto_timeout_s
+# iguales, el detector confirma ambos incidentes el mismo ciclo, y el
+# remediador dispara fix_servicio.sh (reinicia al dueño) mientras el puerto
+# sigue tomado por otro proceso -- el bind vuelve a fallar, ruido o falla
+# sin necesidad -- antes de que fix_puerto.sh llegue a liberar el puerto.
+# Se prioriza la señal específica: PORT_OCCUPIED ya cubre exactamente ese
+# caso, así que SERVICE_FAILED se suprime (no se emite, ni sano ni cruzado)
+# para ese servicio en ese snapshot puntual.
+
+
+def test_owner_inactivo_con_otro_ocupando_el_puerto_no_emite_service_failed():
+    snapshot = _snapshot(
+        ports=(ListeningPort(address="0.0.0.0", port=5432),),
+        service_states=(ServiceState(name="postgresql.service", active=False),),
+    )
+    umbrales = dict(UMBRALES, monitored_ports=(MonitoredPort(port=5432, service="postgresql.service"),))
+    señales = {s.key: s for s in normalize_snapshot(snapshot, **umbrales)}
+    assert señales["port:5432:occupied"].crossed is True
+    assert "service:postgresql.service" not in señales
+
+
+def test_owner_inactivo_sin_nadie_escuchando_conserva_service_failed_y_port_down():
+    # PORT_DOWN, a diferencia de PORT_OCCUPIED, no tiene script de Modo 2
+    # (queda NOT_MAPPED) -- SERVICE_FAILED sigue siendo la única corrección
+    # automática posible, así que acá NO se suprime.
+    snapshot = _snapshot(
+        ports=(),
+        service_states=(ServiceState(name="postgresql.service", active=False),),
+    )
+    umbrales = dict(UMBRALES, monitored_ports=(MonitoredPort(port=5432, service="postgresql.service"),))
+    señales = {s.key: s for s in normalize_snapshot(snapshot, **umbrales)}
+    assert señales["port:5432:down"].crossed is True
+    assert señales["port:5432:occupied"].crossed is False
+    assert señales["service:postgresql.service"].crossed is True
+
+
+def test_servicio_ajeno_al_puerto_ocupado_no_se_suprime():
+    # cron.service está caído pero no tiene puerto vigilado asociado; que
+    # nginx.service esté indebidamente ocupado en :80 no debe apagar la
+    # señal de un servicio sin relación con ese puerto -- la supresión es
+    # por servicio, no un apagado general de SERVICE_FAILED en el snapshot.
+    snapshot = _snapshot(
+        ports=(ListeningPort(address="0.0.0.0", port=80),),
+        service_states=(
+            ServiceState(name="nginx.service", active=False),
+            ServiceState(name="cron.service", active=False),
+        ),
+    )
+    umbrales = dict(UMBRALES, monitored_ports=(MonitoredPort(port=80, service="nginx.service"),))
+    señales = {s.key: s for s in normalize_snapshot(snapshot, **umbrales)}
+    assert "service:nginx.service" not in señales
+    assert señales["service:cron.service"].crossed is True
+
+
+def test_recuperacion_del_dueño_vuelve_a_emitir_service_failed_sano():
+    # Tras la recuperación (el dueño volvió a activarse -- por ejemplo
+    # porque fix_puerto.sh ya lo reinició) SERVICE_FAILED debe volver a
+    # aparecer, sano: la supresión solo aplica al snapshot puntual donde el
+    # puerto está indebidamente ocupado, y el detector necesita una señal
+    # sana explícita para resolver cualquier candidato/incidente que
+    # hubiera quedado abierto sobre esa clave (una clave ausente no avanza
+    # ni se resuelve sola, ver detector.py::evaluate()).
+    snapshot = _snapshot(
+        ports=(ListeningPort(address="0.0.0.0", port=5432),),
+        service_states=(ServiceState(name="postgresql.service", active=True),),
+    )
+    umbrales = dict(UMBRALES, monitored_ports=(MonitoredPort(port=5432, service="postgresql.service"),))
+    señales = {s.key: s for s in normalize_snapshot(snapshot, **umbrales)}
+    assert señales["service:postgresql.service"].crossed is False
+    assert señales["service:postgresql.service"].value == "active"
+    assert señales["port:5432:occupied"].crossed is False
+
+
 # ------------------------------------------------------------------------- carga
 
 

@@ -39,7 +39,6 @@ from doctorjk.modelos import (
     IncidentState,
     ListeningPort,
     MemoryUsage,
-    MonitoredPort,
     ServiceState,
     SignalType,
     SystemSnapshot,
@@ -543,10 +542,16 @@ def test_una_señal_repetida_no_genera_segundo_informe(tmp_path):
 
 
 def test_dos_recursos_mantienen_estado_independiente(tmp_path):
+    # Dos servicios vigilados, sin relación entre sí (a diferencia de un
+    # servicio y el puerto que le corresponde -- ver
+    # monitor.py::normalize_snapshot para el porqué esos dos SÍ se
+    # relacionan, y test_normalizacion.py para la cobertura de esa
+    # interacción): deben confirmar cada uno su propio incidente sin
+    # pisarse el contador.
     config = _config_de_prueba(
         tmp_path,
         service_cycles=2,
-        monitored_ports=(MonitoredPort(port=5432, service="postgresql.service"),),
+        monitored_services=("postgresql.service", "cron.service"),
     )
     reloj = {"ahora": datetime(2026, 8, 26, 12, 0, 0, tzinfo=timezone.utc)}
     procesar, _ = build_incident_pipeline(
@@ -554,8 +559,6 @@ def test_dos_recursos_mantienen_estado_independiente(tmp_path):
     )
 
     t0 = reloj["ahora"]
-    # postgresql cae (service_failed); el puerto sigue escuchado por otra
-    # cosa mientras postgresql no está activo (port_occupied).
     snap = SystemSnapshot(
         captured_at=t0,
         failed_services=(),
@@ -564,20 +567,20 @@ def test_dos_recursos_mantienen_estado_independiente(tmp_path):
         disk_available=True,
         memory=MemoryUsage(total_mb=3900, used_mb=1200, free_mb=800, available_mb=2400),
         memory_available=True,
-        ports=(ListeningPort(address="0.0.0.0", port=5432),),
+        ports=(),
         ports_available=True,
         load=None,
         load_available=False,
-        service_states=(ServiceState(name="postgresql.service", active=False),),
+        service_states=(
+            ServiceState(name="postgresql.service", active=False),
+            ServiceState(name="cron.service", active=False),
+        ),
         service_states_available=True,
     )
     procesar(snap)
     reloj["ahora"] = t0 + timedelta(seconds=30)
     procesar(SystemSnapshot(**{**snap.__dict__, "captured_at": reloj["ahora"]}))
 
-    # Dos claves distintas (service:postgresql.service y
-    # port:5432:occupied) deben confirmar cada una su propio incidente sin
-    # pisarse el contador.
     reloj["ahora"] = t0 + timedelta(seconds=30) + recolector.WINDOW_AFTER
     procesar(SystemSnapshot(**{**snap.__dict__, "captured_at": t0 + timedelta(seconds=30)}))
 

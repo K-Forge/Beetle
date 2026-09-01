@@ -291,14 +291,51 @@ def normalize_snapshot(
     signals: list[Signal] = []
     timestamp = snapshot.captured_at
 
+    # Precálculo para el hallazgo de auditoría del 2026-09-01: qué servicios
+    # monitoreados están, en ESTE snapshot, indebidamente ocupados por otro
+    # proceso en su puerto vigilado (mismo criterio que PORT_OCCUPIED más
+    # abajo -- se calcula acá para no duplicarlo). Hace falta antes del
+    # bloque de servicios porque ese bloque lo usa para decidir qué NO
+    # emitir. Sin datos de puertos (ports_available=False) no hay base para
+    # declarar ocupación indebida -- ver el mismo razonamiento en el bloque
+    # de puertos -- así que el set queda vacío y SERVICE_FAILED se comporta
+    # como antes (fail-safe: mejor sobre-reportar que enmascarar un
+    # service_failed real cuando no se puede confirmar el contexto de puerto).
+    listening_ports: set[int] = set()
+    service_active_by_name: dict[str, bool] = {}
+    services_wrongly_occupying_port: set[str] = set()
+    if snapshot.ports_available:
+        listening_ports = {p.port for p in snapshot.ports}
+        service_active_by_name = {e.name: e.active for e in snapshot.service_states}
+        for monitored in monitored_ports:
+            listening = monitored.port in listening_ports
+            service_active = service_active_by_name.get(monitored.service)
+            if listening and service_active is False:
+                services_wrongly_occupying_port.add(monitored.service)
+
     # Servicios vigilados explícitamente (config.servicios_vigilados): se
     # emite una señal por cada uno, sano o cruzado, en todos los ciclos. A
     # diferencia de `failed_services` (que solo lista lo ya fallido y por eso
     # nunca informa una recuperación), `service_states` viene de consultar
     # cada unidad de la lista, así que el detector se entera igual cuando el
     # servicio vuelve a estar activo (plan-finalizacion-mvp.md defecto 1).
+    #
+    # Excepción (hallazgo de auditoría, 2026-09-01): un servicio que está
+    # inactivo PORQUE otro proceso le ocupa el puerto no emite SERVICE_FAILED
+    # acá -- PORT_OCCUPIED (bloque de puertos, más abajo) ya es la señal
+    # específica para ese caso, y con servicio_ciclos/puerto_timeout_s
+    # iguales ambas se confirmarían en el mismo ciclo: fix_servicio.sh
+    # reiniciaría al dueño mientras el puerto sigue tomado (falla o ruido,
+    # el bind no puede volver a tomar el puerto) justo antes de que
+    # fix_puerto.sh llegue a liberarlo. Se prioriza la señal específica.
+    # Si en cambio nadie escucha en el puerto (PORT_DOWN, no PORT_OCCUPIED),
+    # SERVICE_FAILED se conserva sin excepción: PORT_DOWN no tiene script de
+    # Modo 2 (queda NOT_MAPPED, remediador.py._skip()), así que
+    # fix_servicio.sh sigue siendo la única corrección automática posible.
     if snapshot.service_states_available:
         for service_state in snapshot.service_states:
+            if service_state.name in services_wrongly_occupying_port:
+                continue
             signals.append(
                 Signal(
                     timestamp=timestamp,
@@ -357,8 +394,8 @@ def normalize_snapshot(
     # debía. Sin estado del servicio esperado (no vigilado, o consulta no
     # disponible) no hay base para declarar ocupación indebida: queda sano.
     if snapshot.ports_available:
-        listening_ports = {p.port for p in snapshot.ports}
-        service_active_by_name = {e.name: e.active for e in snapshot.service_states}
+        # listening_ports y service_active_by_name ya se calcularon arriba,
+        # antes del bloque de servicios -- se reutilizan tal cual.
         for monitored in monitored_ports:
             listening = monitored.port in listening_ports
             signals.append(
