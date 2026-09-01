@@ -1243,8 +1243,27 @@ contra un TOML completo y válido: `dry_run`, `disk_pct_threshold`,
 `AttributeError` exacto contra el código viejo, pasando las 6 con el fix.
 Suite completa: 303/303 (antes 297, +6).
 
-**Pendiente antes de reintentar:** los dos fixes de `comun.sh` de este
-intento (aritmética octal + `Path()`) **todavía no se probaron juntos en
-el VPS real** -- el próximo Paso 0 es la primera vez que se ejercitan ahí.
+**Cobertura de regresión agregada antes de un tercer intento (commit
+`f0a61a7`):** `test_scripts_fix_integracion_real.py` corre los 4
+`fix_*.sh` REALES contra el `comun.sh` REAL, un `config.toml` completo
+real y el intérprete real del venv del repo -- solo se falsean `stat`
+(root/640) y los comandos de sistema que cada script invoca
+(`systemctl`/`ss`/`df`/`free`/`journalctl`/`sleep`). Cubre camino
+exitoso, dry-run sin mutación e idempotencia para los 4 tipos de
+incidente. Confirmado por mutación que estos 12 tests hubieran atrapado
+los dos P0 de esta ronda: fallan los 12 contra el `comun.sh` original
+(los dos bugs juntos), fallan los 12 contra el árbol de `cc05ef9` (solo
+el bug de `Path` presente) y fallan los 12 con el chequeo octal
+reintroducido en aislado (con el fix de `Path` puesto) -- cada caso con
+el error exacto esperado. Aprovechado para extraer a `ayudantes.py`
+(módulo de helpers ya existente en el repo, antes solo usado por
+`test_monitor.py`) los dobles de comandos y el helper de instalación que
+`test_scripts_fix.py` y `test_comun_permisos.py` ya duplicaban entre sí,
+en vez de sumar una tercera copia. Suite completa: 315/315 (antes 303).
+
+**Pendiente antes de reintentar:** los dos fixes de `comun.sh` de esta
+ronda (aritmética octal + `Path()`) **todavía no se probaron juntos en
+el VPS real** -- el próximo Paso 0 es la primera vez que se ejercitan ahí,
+ahora con cobertura de regresión local que los habría atrapado a ambos.
 Retomar desde B2 (ninguno de los 4 dry-runs directos llegó a completarse)
 con Fase A repetida desde cero.
