@@ -305,13 +305,17 @@ tocar el VPS salvo necesidad real.
 
 ---
 
-## 9. Gate 4.4 — inventario del VPS y protocolo propuesto (2026-09-01)
+## 9. Gate 4.4 — inventario del VPS y protocolo v2 (2026-09-01)
 
 **Local aprobado de forma independiente:** 259 tests, `bash -n`, `compileall`
-y `git diff --check` en verde. Este inventario es de **solo lectura**, por
-Tailscale; no se instaló, configuró ni ejecutó nada. Nada de lo que sigue en
-esta sección se ejecutó todavía — es la propuesta a revisar antes de tocar
-el VPS.
+y `git diff --check` en verde. Todo lo de esta sección sigue sin ejecutarse
+en el VPS salvo el inventario de solo lectura (§9.1) y la investigación de
+los reinicios (§9.1bis). **El protocolo v2 (§9.2) corrige el borrador
+rechazado** (mataba PostgreSQL/Nginx reales, cruzaba disco sin cálculo
+previo, no resolvía la contradicción "sin Cloudflare" con incidentes que
+pasan por el LLM, no tenía rollback ni medición de tiempo definidos, y no
+tenía un orden de ejecución seguro). Nada de lo que sigue se ejecutó todavía
+— es la propuesta a revisar antes de tocar el VPS.
 
 ### 9.1 Inventario
 
@@ -328,123 +332,435 @@ el VPS.
 | `config.toml` | `modo_remediacion="diagnostico"`, `auto_fix=false`, `dry_run=true`, `unidad_memoria_aprobada=""` — Modo 2 apagado, tal como se dejó |
 | `.env` | Existe, 600, con contenido (no se leyó el valor) |
 | Informes | Los 4 de Gate 3.2 siguen ahí (`service_failed`×2, `port_down`, `disk_full`, `port_occupied`) |
-| Corrida de 24h (Gate 3.2 §7.2) | **No fue continua.** `doctorjk.service` recibió SIGTERM y se reinició dos veces a las 06:32:50 y 06:33:06 UTC, ~1h después de terminado el trabajo de Gate 3.2. No fue el auto-deploy (`main` sigue en `6166bf9` en el VPS) ni una acción mía. Sin transiciones de incidente en la corrida actual (0 desde el último reinicio, 06:33:24). Origen del reinicio: sin determinar — no se investigó más a fondo en este inventario de solo lectura. |
+| Corrida de 24h (Gate 3.2 §7.2) | **No fue continua.** `doctorjk.service` recibió SIGTERM y se reinició dos veces a las 06:32:50 y 06:33:06 UTC. Causa determinada, ver §9.1bis. |
 
-### 9.2 Protocolo propuesto (nada ejecutado; secuencial, reversible, con cleanup en cada paso)
+### 9.1bis Investigación de los reinicios de 06:32:50 / 06:33:06 UTC (solo lectura, causa confirmada)
 
-**Por qué no hace falta un snapshot nuevo:** todo lo de abajo es reversible por
-diseño (instalación idempotente ya probada, provocaciones ya usadas en Gate
-3.2, o acotadas por cgroup) y no hay antecedente de que algo haya fallado de
-forma no recuperable. Se propone no crear uno; se revierte esta decisión si
-algún paso revela lo contrario.
+**Conclusión: parches automáticos de seguridad (`unattended-upgrades` +
+`needrestart`), no un bug de Doctor J/K ni una acción manual.** Evidencia,
+del journal completo de la ventana 06:30–06:35 UTC:
 
-**Paso 0 — Redesplegar el código de Gate 4 (mutación necesaria, reversible)**
-1. Copiar el código actual al VPS por Tailscale (tar, no git — igual que en
-   Gate 3.2; sigue sin pushear nada).
-2. Correr `instalador/install.sh`. Esto va a: actualizar el venv, instalar
-   `scripts-fix/` + generar sudoers (`visudo -cf` + verificación `sudo -n -l`
-   ya integradas), y reinstalar `doctorjk.service` **sin** `NoNewPrivileges`
-   y con `/var/log` en `ReadWritePaths` — el cambio de hardening que Gate 4
-   corrigió en local, ahora sí desplegado.
-3. Verificar: `systemd-analyze verify`, `sudo -n -l` para los 4 scripts,
-   `grep NoNewPrivileges` sobre la unidad instalada (los mismos chequeos que
-   ya tiene `install.sh`), ambas unidades activas.
-4. **Cleanup si algo falla acá:** `instalador/desinstalar.sh` (sin
-   `--delete-data`) revierte todo salvo config/datos, que de por sí no se
-   tocan en este paso.
+- `apt-daily-upgrade.service` arrancó a las 06:31:49 y corrió
+  `unattended-upgrade` (PID 236087) de forma continua hasta las 06:33:32
+  (`Consumed 1min 8.458s CPU time`) — es el único proceso activo en toda la
+  ventana además del ruido habitual de escaneo SSH de internet y el propio
+  `unified-monitoring-agent` de Oracle (`snap_daemon`, ajeno).
+- Se ven **tres cascadas de reinicio**, todas dentro de esa ventana de
+  `apt-daily-upgrade`, nunca fuera de ella:
+  1. **06:32:23** — `systemd[1]: Reexecuting` (típico de una actualización
+     del paquete `systemd` en sí) + cascada de demonios de bajo nivel
+     (`iscsid`, `packagekit`, `ModemManager`, `polkit`, `rsyslog`,
+     `systemd-journald`, `systemd-networkd`/`resolved`/`timesyncd`,
+     `udisks2`) y `doctorjk-trigger.service` (no `doctorjk.service`).
+  2. **06:32:50** — cascada mucho más amplia: `appcarga`, `ModemManager`,
+     `doctorjk-trigger`, `fail2ban`, `nginx`, `packagekit`,
+     `postgresql@16-main`, `rsyslog`, `ssh`, `udisks2` — y
+     `doctorjk.service` (`doctorjk[234039]: SIGTERM recibido, cerrando de
+     forma ordenada`, cierre limpio, no un crash).
+  3. **06:33:06** — segunda pasada más chica: `appcarga`,
+     `doctorjk-trigger`, `fail2ban`, `packagekit` y de nuevo
+     `doctorjk.service` (`doctorjk[238379]: SIGTERM recibido...`, también
+     limpio).
+- Esta lista de servicios (justo los que corren binarios propios contra
+  bibliotecas compartidas del sistema, no los servicios de systemd puros)
+  es exactamente la firma de `needrestart`: reinicia todo lo que enlaza
+  contra una biblioteca que acaba de actualizarse. **Ya se había observado
+  este mismo mecanismo en esta sesión**: instalar `python3.12-venv` con
+  `apt-get install` disparó `needrestart` y reinició `appcarga.service` y
+  `fail2ban.service` como efecto secundario, sin relación con Doctor J/K.
+- No hay ningún `sudo` de un humano ni ningún cambio de `main` (`6166bf9`
+  seguía siendo el desplegado) en la ventana — el único `sudo` visible es
+  el `unified-monitoring-agent` de Oracle consultando su propio estado.
+- **Dato positivo, no solo diagnóstico:** las dos veces, `doctorjk` logueó
+  su propio cierre ordenado (manejo de SIGTERM correcto) antes de que
+  systemd lo reiniciara — no hubo pérdida de estado no controlada ni
+  comportamiento errático, solo el reinicio en sí.
 
-**Paso 1 — Validar los 4 scripts en DRY-RUN primero (sin auto_fix)**
+**Riesgo a controlar para el protocolo v2, no para hoy:** `apt-daily-upgrade`
+corre en una ventana calendarizada por su propio timer y puede volver a
+reiniciar `doctorjk.service` a mitad de un escenario real. El detector es un
+state machine persistente (#174), así que un reinicio a mitad de un conteo
+de persistencia no debería perder el progreso — pero por las dudas, el Paso
+0 del protocolo v2 chequea `systemctl list-timers apt-daily-upgrade.timer`
+antes de arrancar la fase de mutación real y no continúa si el próximo
+disparo cae dentro de la ventana estimada del protocolo.
 
-Aprovecha la corrección de esta sesión: `dry_run=true` ya no exige
-`auto_fix`. Con `modo_remediacion="scripts"`, `auto_fix=false`,
-`dry_run=true`:
+### 9.2 Protocolo v2 (nada ejecutado; secuencial, reversible, con cleanup y salud tras cada escenario)
 
-1. Provocar cada uno de los 4 incidentes con el mismo método ya probado y
-   reversible de Gate 3.2 (`kill -9` a postgresql, `fallocate` bajo
-   `/var/log` con nombre y antigüedad que sí calcen con el patrón de
-   `fix_disco.sh` — no un archivo fuera de su alcance como en Gate 3.2 — y
-   nginx detenido + ocupante de prueba en :80).
-2. Confirmar en el journal: el script corrió, imprimió `[DRY-RUN]`, y
-   `RemediationResult.outcome == DRY_RUN` en el informe anexado.
-3. Confirmar que NINGÚN estado real cambió (servicio sigue caído, disco
-   sigue lleno, puerto sigue ocupado) — es la prueba de que dry-run no muta.
-4. Cleanup: restaurar cada recurso a mano (mismo procedimiento que Gate 3.2)
-   antes de pasar al siguiente escenario.
+**Reglas duras de todo el protocolo:**
 
-**Paso 2 — Validar cada script con ejecución real (`auto_fix=true`,
-`dry_run=false`), uno a la vez, con cleanup entre cada uno**
+- Si cualquier paso de cleanup falla, o el chequeo de salud posterior no
+  calza con la línea base de §9.1, **se para ahí mismo** — no se continúa
+  con el siguiente escenario.
+- Cada edición de `config.toml` exige `sudo systemctl restart
+  doctorjk.service` para tomar efecto (se carga una sola vez al arrancar).
+  Para no multiplicar reinicios, todas las claves temporales de una fase se
+  editan juntas y se reinicia una sola vez por fase.
+- Nunca se toca `nginx`, `postgresql@16-main` ni `appcarga` reales — todos
+  los incidentes se provocan con unidades `systemd-run` transitorias
+  propias, nunca persistidas a disco (si algo queda mal, un reboot del VPS
+  las borra igual, aunque no debería hacer falta llegar a eso).
+- Ningún incidente real (Fase C/D) corre sin que antes `curl` confirme que
+  el stub de LLM local responde (§9.2.2) — así "sin Cloudflare" y "probar
+  el pipeline completo" dejan de ser incompatibles.
+- **Por qué sigue sin hacer falta un snapshot nuevo:** cada mutación es
+  reversible por diseño (unidades transitorias que nunca tocan disco,
+  backup único de `config.toml`/`.env` antes de tocar nada, reinstalación
+  idempotente ya probada en local). Se revisita esta decisión si algún paso
+  revela lo contrario.
 
-*(a) `fix_servicio.sh`* — matar `postgresql@16-main` con `kill -9` (idéntico
-a Gate 3.2). Confirmar remediación real (postgresql vuelve a `active`),
-informe con `RESOLVED`. **Idempotencia:** correr el script una segunda vez a
-mano (`sudo -n /opt/doctorjk/scripts-fix/fix_servicio.sh
-postgresql@16-main.service`) con el servicio ya sano — confirmar que sale 0
-de inmediato sin reiniciar nada (rama "ya está activa").
+#### 9.2.0 Paso 0 — Redesplegar el código de Gate 4 (mutación necesaria, reversible)
 
-*(b) `fix_disco.sh`* — en vez del archivo bajo `/root` de Gate 3.2 (fuera
-del alcance real del script), crear un archivo que el script sí vaya a
-encontrar: `fallocate` bajo `/var/log` con nombre `*.log.1.gz` y mtime de
-hace 10 días (patrón exacto de `fix_disco.sh`), del tamaño que haga falta
-para cruzar `disco_pct`. Confirmar que el script lo lista como candidato, lo
-borra de verdad, y la postcondición pasa. **Idempotencia:** correr el
-script una segunda vez con el disco ya sano — confirmar "ya está bajo el
-umbral" sin acción.
+**Corrección del hallazgo 6:** el borrador anterior copiaba el árbol entero
+por `tar`. Eso habría llevado `docs/plan-finalizacion-mvp.md` y
+`graphify-out/` (ambos sin trackear, ver `git status`) al VPS sin querer.
+`git archive HEAD` transfiere **solo lo comiteado en el commit actual de
+`AIprototipo`** — nunca `.git/`, `.env` ni archivos sin trackear.
 
-*(c) `fix_puerto.sh`* — nginx detenido + `systemd-run` con un
-`python3 -m http.server 80` como ocupante de prueba (idéntico a Gate 3.2).
-Confirmar remediación real (nginx recupera el puerto, verificado con `ss`).
-**Idempotencia:** correr el script una segunda vez con nginx ya sano —
-confirmar "ya tiene el puerto" sin acción. Además, repetir el escenario
-pero deteniendo el ocupante de prueba ANTES de correr el script (para
-ejercitar la corrección del hallazgo de "el ocupante ya no está" en el VPS
-real, no solo con dobles).
+```bash
+# Chequeo previo: ¿va a disparar apt-daily-upgrade a mitad del protocolo?
+tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net \
+  "systemctl list-timers apt-daily-upgrade.timer --no-pager"
+# Si el próximo disparo cae dentro de la próxima hora, esperar a que termine
+# esa corrida antes de seguir (no es bloqueante si no calza, solo se anota).
 
-*(d) `fix_memoria.sh`* — el caso que pide una unidad de prueba acotada por
-cgroup, no un servicio real:
+git archive HEAD | tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net \
+  "rm -rf /tmp/doctorjk-deploy && mkdir -p /tmp/doctorjk-deploy && tar -x -C /tmp/doctorjk-deploy"
 
-   - Crear una unidad transitoria `doctorjk-test-memhog` vía `systemd-run`
-     con `--property=MemoryMax=1200M` (tope duro que el kernel hace
-     cumplir — el proceso no puede pasarlo pase lo que pase). El comando
-     que corre asigna ~1000 MB una sola vez usando un archivo marcador bajo
-     `/run` para no volver a asignar si se reinicia (así "reiniciar la
-     unidad" sí libera memoria de verdad, en vez de reasignarla de
-     inmediato).
-   - **No se toca `memoria_disponible_mb=512` para esto.** Con 8.9 GiB
-     libres, cruzar ese umbral de verdad exigiría ocupar ~8.4 GiB — el
-     riesgo que ya se descartó en Gate 3.2. En vez de eso, se baja
-     `memoria_disponible_mb` TEMPORALMENTE a un valor pensado para que la
-     asignación de 1000 MB, acotada por el cgroup, alcance a cruzarlo (p.
-     ej. memoria libre actual menos ~700 MB). Se restaura el valor original
-     (512) apenas termina la prueba.
-   - Setear `unidad_memoria_aprobada = "doctorjk-test-memhog"` (temporal,
-     restaurado a `""` al final).
-   - Confirmar: precondición de cgroup pasa (MemoryCurrent de la unidad de
-     prueba cubre el déficit calculado), reinicio real, postcondición pasa
-     (memoria disponible vuelve a estar sobre el umbral). **Idempotencia:**
-     con memoria ya suficiente, correr el script de nuevo — confirmar "ya
-     hay memoria suficiente" sin reiniciar nada.
-   - Cleanup: detener `doctorjk-test-memhog` (`systemctl stop`, se
-     autolimpia por ser transitoria), restaurar `memoria_disponible_mb` y
-     `unidad_memoria_aprobada` a sus valores originales.
+# Backup único de config/.env -- sirve tanto para el rollback de este paso
+# como para la restauración final de la Fase E.
+tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
+  sudo cp /etc/doctorjk/config.toml /etc/doctorjk/config.toml.bak-gate44
+  sudo cp /etc/doctorjk/.env /etc/doctorjk/.env.bak-gate44
+"
 
-**Paso 3 — Tipo no mapeado (`port_down`)**
+tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "sudo /tmp/doctorjk-deploy/instalador/install.sh"
+```
 
-Detener nginx sin que nada más ocupe el puerto (nadie escuchando en :80 =
-`port_down`, no `port_occupied`). Con Modo 2 en `auto_fix=true`, confirmar
-en el journal: `"sin script de corrección para port_down, queda solo
-diagnosticado"`, `RemediationOutcome.NOT_MAPPED`, y que el informe generado
-NO trae sección "Corrección automática". Cleanup: reiniciar nginx.
+Verificar: `systemd-analyze verify`, `sudo -n -l` para los 4 scripts,
+`grep NoNewPrivileges` sobre la unidad instalada (los mismos chequeos que ya
+tiene `install.sh`), ambas unidades (`doctorjk`, `doctorjk-trigger`)
+activas.
 
-**Paso 4 — Apagar Modo 2 y dejar el VPS como se encontró**
+**Rollback si algo de esto falla (corrección del hallazgo 6):** nunca
+`desinstalar.sh` — dejaría el agente completamente fuera. El VPS ya tiene
+en `/home/beetle/Beetle` el checkout de `main` en `6166bf9` (Gate 3.2), que
+este paso nunca toca porque despliega a `/tmp/doctorjk-deploy`, un
+directorio aparte. Restaurar es re-correr el instalador viejo desde ese
+checkout intacto:
 
-`modo_remediacion="diagnostico"`, `auto_fix=false`, `dry_run=true` (los
-valores con los que está hoy). Confirmar servicios activos, disco/memoria
-normales, sin unidades de prueba residuales.
+```bash
+tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "sudo /home/beetle/Beetle/instalador/install.sh"
+```
+
+`install.sh` es idempotente y preserva `config.toml`/`.env` existentes, así
+que esto vuelve al estado exacto de Gate 3.2 sin perder configuración.
+
+#### 9.2.1 Fase A — preparar unidades sintéticas y config temporal (todavía sin provocar nada)
+
+**Corrección del hallazgo 2:** ningún paso de este protocolo detiene Nginx
+ni mata PostgreSQL reales. Los 4 tipos de incidente se provocan con
+unidades `systemd-run` transitorias propias del protocolo, nunca cargadas
+desde disco:
+
+| Unidad | Rol | Notas |
+|---|---|---|
+| `doctorjk-test-svc.service` | `service_failed` | falla la primera vez que arranca, queda "active" (sleep) la segunda — así el reinicio de `fix_servicio.sh` sí prueba algo |
+| `doctorjk-test-owner.service` | dueño esperado del puerto 18080 | se arranca una vez y se detiene, para que quede "cargada" y `systemctl restart` (el que corre `fix_puerto.sh`) la reconozca |
+| `doctorjk-test-occupier.service` | ocupante indebido del puerto 18080 | listening en 18080 mientras `doctorjk-test-owner` está detenida = `port_occupied` |
+| `doctorjk-test-memhog.service` | consumidor de memoria acotado | `MemoryMax=1200M`, `MemorySwapMax=0`; asigna ~1000 MB una sola vez (marcador en `/run`), así un `restart` real libera la memoria en vez de reasignarla |
+| `doctorjk-test-llmstub.service` | stub OpenAI-compatible en `127.0.0.1` | ver §9.2.2 |
+
+Preparación (sin provocar nada todavía):
+
+```bash
+tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
+  # doctorjk-test-owner: se registra la definición transitoria y se deja detenida.
+  sudo systemd-run --unit=doctorjk-test-owner python3 -m http.server 18080 --bind 127.0.0.1
+  sudo systemctl stop doctorjk-test-owner
+"
+```
+
+**Cálculo del filler de disco ANTES de crearlo (corrección del hallazgo 3
+-- nunca cruzar el 90% real, y nunca crear un archivo sin calcular su
+tamaño primero):**
+
+```bash
+tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
+  total_kb=\$(df --output=size -k / | tail -1)
+  used_kb=\$(df --output=used -k / | tail -1)
+  target_pct=5
+  target_used_kb=\$(( total_kb * target_pct / 100 ))
+  filler_kb=\$(( target_used_kb - used_kb + 51200 ))   # +50 MiB de margen para cruzar con claridad
+  max_kb=\$(( 4 * 1024 * 1024 ))                        # tope duro de 4 GiB
+  echo \"filler calculado: \$((filler_kb / 1024)) MiB (tope 4096 MiB)\"
+  if (( filler_kb > max_kb )); then echo 'ABORTAR: filler superaría 4 GiB' >&2; exit 1; fi
+  if (( filler_kb <= 0 )); then echo 'ABORTAR: ya estamos sobre el 5% sin filler' >&2; exit 1; fi
+  echo \$filler_kb > /tmp/doctorjk-filler-kb
+"
+```
+
+Con el disco real al 3% (§9.1), este cálculo da un filler de ~3 GiB para
+cruzar un umbral temporal de 5% — cómodamente bajo el tope de 4 GiB y muy
+lejos del 90% real.
+
+**Stub de LLM (corrección del hallazgo 5):** ver §9.2.2 antes de arrancarlo.
+
+**Config temporal, un solo pase de edición + un solo restart:**
+
+Respaldo ya hecho en el Paso 0. Editar `/etc/doctorjk/config.toml`:
+
+- `servicios_vigilados` += `"doctorjk-test-svc.service"`,
+  `"doctorjk-test-occupier.service"` (sin esto, `fix_servicio.sh` y
+  `fix_puerto.sh` escalan en vez de actuar sobre unidades que no reconocen).
+- `puertos_vigilados` += `{ puerto = 18080, servicio =
+  "doctorjk-test-owner.service" }`.
+- `disco_pct` → `5` (original respaldado en el Paso 0).
+- `memoria_disponible_mb` → `$(free -m | awk '/^Mem:/{print $7}') - 700`
+  calculado en el momento (con ~8.9 GiB libres da un umbral ~8.2 GiB —
+  cruzarlo exige que el memhog de 1000 MB acotado por cgroup se sume al uso
+  real, no bajar la memoria disponible real del sistema).
+- `unidad_memoria_aprobada` → `"doctorjk-test-memhog.service"`.
+- `llm_url` → endpoint del stub (§9.2.2).
+- **Corrección del hallazgo 7 (intervalos seguros para que el E2E quepa en
+  minutos):** `intervalo_monitor_s` → `5`, `ciclos_persistencia` → `2`,
+  `servicio_ciclos` → `2`, `puerto_timeout_s` → `10` (da `port_cycles = 2`
+  con el nuevo intervalo). Esto baja la confirmación de un incidente a
+  ~10 s en vez de los `30 s × 2` (60 s) de producción.
+
+```bash
+tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "sudo systemctl restart doctorjk.service"
+```
+
+Verificar en journal que no hay errores de `ConfigError` tras el reinicio y
+que ambas unidades siguen activas.
+
+#### 9.2.2 Stub de LLM efímero (corrección del hallazgo 5)
+
+El pipeline llama al LLM **antes** de remediar (`llm.py` → `informe.py` →
+`remediador.py`), así que cualquier escenario que pase por el pipeline
+completo (Fase B2 y Fases C/D) necesita un backend que responda, sin usar
+Cloudflare. Un stub HTTP mínimo, atado solo a `127.0.0.1`, con el formato
+exacto que espera `llm.py::_extract_content()`:
+
+```python
+#!/usr/bin/env python3
+# Stub OpenAI-compatible efimero, solo para validar Modo 2 sin llamar a
+# Cloudflare (Gate 4.4). Ignora el cuerpo del pedido y el header de
+# autorizacion: no hace falta credencial real para responder.
+import json
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+RESPUESTA = {
+    "choices": [{"message": {"content": "Diagnostico simulado por el stub de validacion (Gate 4.4)."}}]
+}
+
+class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        body = json.dumps(RESPUESTA).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, fmt, *args):
+        pass
+
+if __name__ == "__main__":
+    HTTPServer(("127.0.0.1", 8998), Handler).serve_forever()
+```
+
+```bash
+tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
+  ss -tln | grep -q ':8998 ' && { echo '8998 ya está en uso, elegir otro puerto' >&2; exit 1; }
+  cat > /tmp/doctorjk-llmstub.py <<'PYEOF'
+  <contenido de arriba>
+PYEOF
+  sudo systemd-run --unit=doctorjk-test-llmstub --collect \
+    python3 /tmp/doctorjk-llmstub.py
+  sleep 1
+  curl -sf -X POST http://127.0.0.1:8998/v1/chat/completions -d '{}' | grep -q 'Diagnostico simulado' \
+    || { echo 'el stub no responde con el formato esperado' >&2; exit 1; }
+"
+```
+
+`llm_url` en config.toml queda en `http://127.0.0.1:8998/v1/chat/completions`
+mientras dure la Fase A→D. Nunca se usa la API real de Cloudflare en este
+protocolo.
+
+#### 9.2.3 Fase B — smoke test (todo en `dry_run=true`, `auto_fix=false`; nada muta)
+
+**B1 — un tipo por el pipeline completo, en dry-run.** Se usa
+`service_failed` (el más simple de los cuatro):
+
+1. Provocar: `sudo systemd-run --unit=doctorjk-test-svc --property=Restart=no /bin/bash -c 'test -e /run/doctorjk-test-svc.marker && exec sleep infinity || { touch /run/doctorjk-test-svc.marker; exit 1; }'`
+2. Esperar la confirmación del detector (`journalctl -u doctorjk | grep -- '-> incident:'`).
+3. Confirmar en el informe anexado: sección de remediación con
+   `[DRY-RUN] Ningún comando fue ejecutado`.
+4. Confirmar que NO se ejecutó el restart real: la unidad sigue en estado
+   `failed` (no pasó a `active`/sleep).
+5. Cleanup de este sub-paso: `sudo systemctl stop doctorjk-test-svc`,
+   `sudo systemctl reset-failed doctorjk-test-svc`,
+   `sudo rm -f /run/doctorjk-test-svc.marker` — vuelve a cero para la Fase C.
+
+**B2 — los 4 scripts, llamados directo (sin pasar por el pipeline, sin
+LLM), en dry-run.** Cada uno se provoca, se llama a mano, se confirma que
+no muta nada, y se limpia antes de pasar al siguiente:
+
+- `fix_servicio.sh`: repetir la provocación de B1 (falla una vez) →
+  `sudo -n /opt/doctorjk/scripts-fix/fix_servicio.sh doctorjk-test-svc.service`
+  → confirmar `[DRY-RUN]` y que sigue `failed` → mismo cleanup que B1.
+- `fix_disco.sh`: `fallocate -l "$(cat /tmp/doctorjk-filler-kb)K"
+  /var/log/doctorjk-test.log.1.gz && sudo touch -d '10 days ago'
+  /var/log/doctorjk-test.log.1.gz` → `sudo -n
+  /opt/doctorjk/scripts-fix/fix_disco.sh` → confirmar `[DRY-RUN]` y que el
+  archivo sigue ahí → cleanup: `sudo rm -f /var/log/doctorjk-test.log.1.gz`.
+- `fix_puerto.sh`: `sudo systemctl start doctorjk-test-occupier` (definida
+  igual que `doctorjk-test-owner` en §9.2.1, con `--collect`) → `sudo -n
+  /opt/doctorjk/scripts-fix/fix_puerto.sh 18080` → confirmar `[DRY-RUN]` y
+  que el ocupante sigue escuchando (no `doctorjk-test-owner`) → cleanup:
+  `sudo systemctl stop doctorjk-test-occupier`.
+- `fix_memoria.sh`: `sudo systemd-run --unit=doctorjk-test-memhog
+  --property=MemoryMax=1200M --property=MemorySwapMax=0 --collect
+  python3 /tmp/doctorjk-deploy/memhog.py` (script de una sola asignación,
+  ver más abajo) → `sudo -n /opt/doctorjk/scripts-fix/fix_memoria.sh` →
+  confirmar `[DRY-RUN]` y que la memoria disponible sigue baja → cleanup:
+  `sudo systemctl stop doctorjk-test-memhog`, `sudo rm -f
+  /run/doctorjk-test-memhog.marker`.
+
+`memhog.py` (transferido junto con el resto en el Paso 0, o creado igual
+que el stub de LLM con un heredoc):
+
+```python
+#!/usr/bin/env python3
+# Memhog sintetico acotado por MemoryMax del cgroup, para validar
+# fix_memoria.sh sin tocar memoria real fuera del cgroup (Gate 4.4).
+import os
+import time
+
+MARCADOR = "/run/doctorjk-test-memhog.marker"
+
+if os.path.exists(MARCADOR):
+    time.sleep(1_000_000)  # ya asigno una vez: el restart debe liberar, no repetir
+else:
+    open(MARCADOR, "w").close()
+    bloque = bytearray(1000 * 1024 * 1024)
+    for i in range(0, len(bloque), 4096):
+        bloque[i] = 1  # tocar cada pagina para que cuente como RSS real del cgroup
+    time.sleep(1_000_000)
+```
+
+Al cerrar la Fase B, ningún recurso queda en estado alterado (todas las
+unidades de prueba detenidas, sin marcadores, sin filler). Fase C arranca
+desde cero.
+
+#### 9.2.4 Fase C — 4 escenarios reales, secuenciales (`dry_run=false`, `auto_fix=true`)
+
+```bash
+tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
+  sudo sed -i 's/^dry_run = .*/dry_run = false/; s/^auto_fix = .*/auto_fix = true/' /etc/doctorjk/config.toml
+  sudo systemctl restart doctorjk.service
+"
+```
+
+**Corrección del hallazgo 7 — medición de tiempo, igual para los 4:**
+
+- `T_provocación` = hora local justo antes de correr el comando de
+  provocación (`date -u +%FT%T`).
+- `T_confirmación` = timestamp del journal en la línea `-> incident:` de
+  `journalctl -u doctorjk`.
+- `T_resuelto` = campo `fin=` (ISO, embebido en el propio mensaje) de la
+  línea `resultado=resolved` que loguea `remediador._log_result()`.
+- Se exige `T_resuelto - T_confirmación < 120 s`. `T_resuelto -
+  T_provocación` se registra también, sin exigir el mismo tope (incluye el
+  tiempo de detección, ya acortado por los intervalos temporales de la
+  Fase A).
+
+Para cada uno de los 4 tipos, en este orden — **si el cleanup o el chequeo
+de salud de alguno falla, se para ahí, no se sigue con el siguiente:**
+
+**(a) `service_failed`** — provocar igual que B1
+(`doctorjk-test-svc`, falla una vez). Confirmar remediación real
+(`RESOLVED`, la unidad queda `active`/sleep). **Idempotencia directa:**
+`sudo -n /opt/doctorjk/scripts-fix/fix_servicio.sh
+doctorjk-test-svc.service` con la unidad ya sana → sale 0 sin reiniciar.
+Cleanup: `systemctl stop doctorjk-test-svc`, `reset-failed`, borrar
+marcador, quitar de `servicios_vigilados`. Salud: `doctorjk-test-svc` no
+queda cargada como `failed`.
+
+**(b) `disk_full`** — recalcular el filler (mismo bloque de §9.2.1, el
+disco ya pudo variar) y crearlo. Confirmar remediación real: el script
+lista el candidato, lo borra, la postcondición pasa. **Idempotencia
+directa:** correr `fix_disco.sh` de nuevo con el disco ya bajo el umbral →
+"ya está bajo el umbral" sin acción. Cleanup: confirmar que no queda ningún
+`doctorjk-test.log*` residual (ya lo borró el propio script). Salud:
+`df` vuelve a ~3%.
+
+**(c) `port_occupied`** — `sudo systemctl start doctorjk-test-occupier`
+(con `doctorjk-test-owner` detenida). Confirmar remediación real: se
+detiene el ocupante, se reinicia `doctorjk-test-owner`, verificado con
+`ss` (no solo `is-active`). **Idempotencia directa:** `fix_puerto.sh 18080`
+con `doctorjk-test-owner` ya activa → "ya tiene el puerto" sin acción.
+**Chequeo adicional (bonus, ejercita el hallazgo del ocupante que ya
+desapareció):** repetir el escenario deteniendo `doctorjk-test-occupier` A
+MANO antes de correr `fix_puerto.sh` — confirmar que igual reinicia y
+verifica `doctorjk-test-owner` con `ss`, sin declarar éxito solo porque
+nadie ocupaba el puerto en ese instante. Cleanup: dejar
+`doctorjk-test-owner` corriendo (hace falta para la Fase D) o detenerla si
+la Fase D no sigue de inmediato. Salud: `ss -tln` muestra 18080 con el PID
+de `doctorjk-test-owner`.
+
+**(d) `memory_low`** — arrancar `doctorjk-test-memhog` (mismo diseño que
+B2). Confirmar precondición de cgroup, restart real, postcondición
+(memoria disponible vuelve sobre el umbral temporal). **Idempotencia
+directa:** `fix_memoria.sh` con memoria ya suficiente → "ya hay memoria
+suficiente" sin reiniciar. Cleanup: `systemctl stop doctorjk-test-memhog`,
+borrar marcador. Salud: `free -m` vuelve cerca de la línea base de §9.1.
+
+#### 9.2.5 Fase D — tipo no mapeado (`port_down`)
+
+Con `doctorjk-test-owner` y `doctorjk-test-occupier` ambas detenidas
+(nadie escucha en 18080, pero sigue en `puertos_vigilados`). Confirmar en
+el journal: `"sin script de corrección para port_down, queda solo
+diagnosticado"`, `RemediationOutcome.NOT_MAPPED` en el informe, y que el
+informe generado NO trae sección "Corrección automática". No hay nada que
+limpiar (el estado final esperado — nadie escuchando — ya es el estado en
+el que se provocó). Salud: igual que antes, nada más cambió.
+
+#### 9.2.6 Fase E — cierre: apagar todo y restaurar
+
+```bash
+tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
+  sudo systemctl stop doctorjk-test-llmstub doctorjk-test-owner \
+    doctorjk-test-occupier doctorjk-test-svc doctorjk-test-memhog 2>/dev/null || true
+  sudo systemctl reset-failed doctorjk-test-svc 2>/dev/null || true
+  sudo rm -f /run/doctorjk-test-svc.marker /run/doctorjk-test-memhog.marker \
+    /var/log/doctorjk-test.log.1.gz /tmp/doctorjk-llmstub.py /tmp/doctorjk-filler-kb
+  sudo cp /etc/doctorjk/config.toml.bak-gate44 /etc/doctorjk/config.toml
+  sudo systemctl restart doctorjk.service
+  systemctl list-units --all 'doctorjk-test-*' --no-pager
+"
+```
+
+Las unidades `doctorjk-test-*` quedan detenidas y sin marcador; al ser
+transitorias nunca se escribieron a disco, así que un reboot del VPS las
+borraría igual aunque algo de esto fallara. Verificación final: los mismos
+5 chequeos de §9.1 (servicios reales activos, carga, disco ~3%, memoria
+~8.9 GiB libres, `config.toml` con `modo_remediacion="diagnostico"`,
+`auto_fix=false`, `dry_run=true`, `unidad_memoria_aprobada=""` como estaba)
+más `systemctl list-units --all 'doctorjk-test-*'` vacío o todo `inactive`.
 
 ### 9.3 Lo que este protocolo NO hace
 
-- No llama a Cloudflare (Modo 2 es determinista, no usa el LLM).
-- No deja `auto_fix=true` activo al terminar.
+- No llama a Cloudflare en ningún momento — todas las fases que pasan por
+  el LLM usan el stub local de §9.2.2, nunca la API real.
+- No toca `nginx`, `postgresql@16-main` ni `appcarga` reales en ningún
+  paso — todos los incidentes usan unidades `doctorjk-test-*` propias.
+- No deja `auto_fix=true` ni el stub de LLM activos al terminar (Fase E).
 - No crea un snapshot nuevo (§ arriba).
 - No repite pruebas de carga sostenida (`hey`/`wrk`) — no hacen falta para
   validar Modo 2.
+- No cruza el 90% de disco real en ningún momento (§9.2.1 calcula el
+  filler antes de crearlo y aborta si superaría 4 GiB).
