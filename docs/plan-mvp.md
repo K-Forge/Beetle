@@ -1,5 +1,11 @@
 # Plan de ejecución del MVP de Doctor J/K
 
+> **Plan histórico, supersedido.** Desde el 2026-08-31 la guía operativa vigente
+> es [`plan-finalizacion-mvp.md`](plan-finalizacion-mvp.md), que audita el estado
+> real de ramas, VPS e issues y corrige varias afirmaciones de este documento
+> (por ejemplo, Gate B nunca se validó con el Detector cableado). Este archivo se
+> conserva por valor histórico; no usarlo para afirmar qué está cerrado hoy.
+
 **Fecha de corte:** 2026-08-25  
 **Base revisada:** `main` en `6166bf9`, PR #223, issues #166–#222 y documentos v4.0  
 **Objetivo:** convertir el repositorio actual en un MVP v0.1 instalable, medido y

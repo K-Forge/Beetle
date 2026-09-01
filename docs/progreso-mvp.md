@@ -1,12 +1,19 @@
 # Progreso del MVP — traspaso
 
-**Rama:** `gate-d/modo-1` · **Base:** `AIprototipo` (@MauItu) + corrección de Gate C
-**Corte:** 2026-08-26 · **Suite:** 158 tests en verde
+**Rama:** `mvp/integracion-modo-1` · **Base:** `gate-d/modo-1` (@MauItu + corrección de Gate C)
+**Corte:** 2026-08-31 · **Suite:** 158 tests en verde (heredados de `gate-d/modo-1`)
 
 Este documento existe para que alguien retome sin leer el historial completo.
 Dice qué está hecho, qué está **verificado contra el VPS real** y qué sigue
 pendiente a propósito. Donde no hay medición, lo dice; no hay resultados
 inventados (plan-mvp.md §4, regla 10).
+
+> **Corrección del 2026-08-31:** la versión anterior de este documento (corte
+> 2026-08-26) afirmaba Gate B "corriendo" con fin previsto y Gate D "cerrado".
+> Ambas afirmaciones no resisten la auditoría — ver
+> [`plan-finalizacion-mvp.md`](plan-finalizacion-mvp.md), que es ahora la fuente
+> normativa vigente sobre el estado real del proyecto. Este archivo se corrige
+> para dejar de repetirlas.
 
 ---
 
@@ -15,9 +22,9 @@ inventados (plan-mvp.md §4, regla 10).
 | Gate | Estado | Verificación |
 |---|---|---|
 | A — Base | Hecho por @MauItu | 105 tests |
-| B — Detector | **Corriendo** | 24 h en el VPS, termina 2026-08-27 04:41 UTC |
-| C — Evidencia y privacidad | **Cerrado** | Corpus real del VPS, 0 fugas |
-| D — Modo 1 (hito alfa) | **Cerrado** | Incidente real en `beetle-vps` |
+| B — Detector | **INVÁLIDA — sin Detector cableado** | Corrida iniciada 2026-08-26, seguía activa al 2026-08-31: 17.040 muestras, 0 transiciones, porque el ejecutable usó `on_snapshot=log_snapshot` y nunca instanció el Detector. Debe detenerse y archivarse como `INVALIDA_SIN_DETECTOR` (Gate 0.2 del plan), no repetirse hasta que el pipeline esté cableado |
+| C — Evidencia y privacidad | Cerrado | Corpus real del VPS, 0 fugas |
+| D — Modo 1 (hito alfa) | **Código escrito, NO integrado** | El pipeline (`pipeline.py`, `llm.py`, `informe.py`) funciona invocado directamente, pero `doctorjk/main.py` sigue construyendo la app con `on_snapshot=log_snapshot`: nunca corrió como el ejecutable real. No se puede llamar "cerrado" hasta completar Gate 2 del plan de finalización |
 | E — Servicio e instalación | Parcial | Unidades validadas; instalación cronometrada pendiente |
 | F–I | Sin empezar | — |
 
@@ -106,6 +113,11 @@ todo D1 se probó con dobles. Antes de confiar en el Modo 1 hay que hacer una
 llamada real a Cloudflare y comprobar que el formato de respuesta coincide con
 lo que espera `_extraer_contenido`.
 
+**El ejecutable real (`doctorjk/main.py`) nunca corrió este flujo.** La
+verificación de arriba se hizo invocando el pipeline directamente, no a través
+del proceso que instala systemd. Ver defecto 1 en `plan-finalizacion-mvp.md`
+§3.1 y Gate 2 de ese mismo plan.
+
 ---
 
 ## 4. Gate E — parcial
@@ -143,29 +155,40 @@ Ahora `.env` contiene únicamente `DOCTORJK_LLM_API_KEY`.
 
 ## 6. Qué sigue
 
-**Inmediato, cuando termine Gate B (2026-08-27 04:41 UTC):**
+El orden vigente es el de la sección 9 de `plan-finalizacion-mvp.md`, no el que
+describía este documento antes de la corrección. Resumen:
 
-1. Contar incidentes declarados en `/opt/gate-b/gate-b.log`. Cualquiera es un
-   falso positivo: el servidor estuvo sano toda la corrida.
-2. **Dato para la evaluación:** se inyectaron 7 líneas en prioridad `warning`
-   alrededor de las 04:43 UTC para armar el corpus de Gate C. Si el detector
-   declaró un incidente por eso, es un falso positivo legítimo que hay que
-   contar, no descontar.
-3. Restaurar el VPS desde snapshot y cerrar Gate E con la instalación cronometrada.
+1. Resolver la visibilidad pública del repositorio (requiere autorización humana).
+2. Detener y archivar la corrida inválida de Gate B como `INVALIDA_SIN_DETECTOR`
+   — no calcular falsos positivos con ella, no contar sus 17.040 muestras como
+   evaluación del Detector.
+3. Trabajar sobre `mvp/integracion-modo-1` (ya creada desde `gate-d/modo-1`).
+4. Escribir el test que expone que `main()` no cablea el pipeline (Gate 1.1).
+5. Corregir normalización de servicios/puertos sanos y persistencia por tipo
+   de señal (Gate 1.2–1.3).
+6. Cablear el Modo 1 real desde configuración (Gate 2.1).
+7. Completar la ventana +1 minuto y el contrato real del proveedor (Gate 2.2–2.3).
+8. Sanear identificadores al inglés y manejo de excepciones (Gate 1.4).
+9. Validar instalación, llamada real a Cloudflare, los cuatro incidentes básicos
+   y una corrida de 24 h con el Detector realmente cableado (Gate 3).
+10. Recién entonces, el primer PR a `main` y el Modo 2 (#199).
 
-**Antes de confiar en el Modo 1:** una llamada real al proveedor.
-
-**Después:** Gate F (Modo 2 determinista) y Gate G. Recordar que **#203 dice
-provocar la caída con `systemctl stop postgresql`, y eso no genera ningún
-evento** — parar un servicio limpiamente no es un fallo. Hay que matar el
-proceso. Está documentado en el comentario de #172.
+Recordar que **#203 dice provocar la caída con `systemctl stop postgresql`, y
+eso no genera ningún evento** — parar un servicio limpiamente no es un fallo.
+Hay que matar el proceso. Está documentado en el comentario de #172 y en Gate
+3.2 del plan de finalización.
 
 ---
 
 ## 7. Infraestructura del VPS
 
-- **Gate B corriendo** desde `/opt/gate-b` (PIDs del agente y del trigger).
-  Al terminar, borrar ese directorio.
+- **Gate B sigue corriendo** desde `/opt/gate-b` (PIDs del agente y del
+  trigger), verificado por Tailscale el 2026-08-31. Debe detenerse con SIGTERM
+  por PID exacto (no por patrón amplio), archivarse como corrida inválida y
+  solo entonces limpiarse `/opt/gate-b` — ver Gate 0.2 del plan de finalización.
+- No existen `/opt/doctorjk`, `/etc/doctorjk` ni `/var/lib/doctorjk`: el
+  Modo 1 nunca se instaló de verdad en el VPS.
 - Snapshot vigente: `beetle-vps-2026-08-19-1641`, 1 de 5 del cupo gratuito.
 - El despliegue automático solo sigue `main`; mientras esto viva en una rama,
-  el VPS se queda en la última versión de `main`.
+  el VPS se queda en la última versión de `main` (`6166bf9`), que solo tiene
+  el trigger original.
