@@ -585,10 +585,10 @@ desde disco:
 
 | Unidad | Rol | Notas |
 |---|---|---|
-| `doctorjk-test-svc.service` | `service_failed` | **simplificado (corrección del hallazgo del segundo bloqueante):** ya no un truco de marcador que "falla la primera vez" -- un `sleep infinity` sano y corriente, provocado con `systemctl kill -s KILL` (el equivalente de `kill -9` sin tener que buscar el PID a mano), igual que Gate 3.2 provocó `postgresql` real |
-| `doctorjk-test-owner.service` | dueño esperado del puerto 18080 | se registra una vez en la Fase A y se deja **corriendo** (no detenida -- ver más abajo, por qué) |
-| `doctorjk-test-occupier.service` | ocupante indebido del puerto 18080 | listening en 18080 mientras `doctorjk-test-owner` está detenida = `port_occupied`. Se define con `--collect`: al detenerla, systemd la descarga de inmediato -- **corrección del hallazgo (b):** cada vez que hace falta, se recrea con el `systemd-run` completo (nunca un `systemctl start doctorjk-test-occupier` a secas, que fallaría con "unit not found" si ya fue recolectada). Nunca coexiste con `doctorjk-test-owner` corriendo -- los dos no pueden enlazar el mismo puerto a la vez |
-| `doctorjk-test-memhog.service` | consumidor de memoria acotado | `MemoryMax=1200M`, `MemorySwapMax=0`; asigna ~1000 MB una sola vez (marcador en `/run`), así un `restart` real libera la memoria en vez de reasignarla |
+| `doctorjk-test-svc.service` | `service_failed` | **simplificado (corrección del hallazgo del segundo bloqueante):** ya no un truco de marcador que "falla la primera vez" -- un `sleep infinity` sano y corriente, provocado con `systemctl kill -s KILL` (el equivalente de `kill -9` sin tener que buscar el PID a mano), igual que Gate 3.2 provocó `postgresql` real. Unidad **real efímera** bajo `/run/systemd/system/` -- ver hallazgo del tercer intento, más abajo |
+| `doctorjk-test-owner.service` | dueño esperado del puerto 18080 | se registra una vez en la Fase A y se deja **corriendo** (no detenida -- ver más abajo, por qué). Unidad **real efímera** bajo `/run/systemd/system/` -- ver hallazgo del tercer intento, más abajo |
+| `doctorjk-test-occupier.service` | ocupante indebido del puerto 18080 | listening en 18080 mientras `doctorjk-test-owner` está detenida = `port_occupied`. Se define con `--collect`: al detenerla, systemd la descarga de inmediato -- **corrección del hallazgo (b):** cada vez que hace falta, se recrea con el `systemd-run` completo (nunca un `systemctl start doctorjk-test-occupier` a secas, que fallaría con "unit not found" si ya fue recolectada). Nunca coexiste con `doctorjk-test-owner` corriendo -- los dos no pueden enlazar el mismo puerto a la vez. Sigue siendo transitoria a propósito: su rol es crearse y destruirse repetidas veces, nunca detenerse-y-reusarse-después, así que el hallazgo del tercer intento no le aplica |
+| `doctorjk-test-memhog.service` | consumidor de memoria acotado | `MemoryMax=1200M`, `MemorySwapMax=0`; asigna ~1000 MB una sola vez (marcador en `/run`), así un `restart` real libera la memoria en vez de reasignarla. También transitoria a propósito: `fix_memoria.sh` la reinicia mientras sigue activa, nunca tras un `stop` separado, así que tampoco le aplica el hallazgo |
 | `doctorjk-test-llmstub.service` | stub OpenAI-compatible en `127.0.0.1` | ver §9.2.2 |
 
 **Por qué `doctorjk-test-owner` se deja corriendo, no detenida (hallazgo
@@ -604,14 +604,69 @@ por ser `NOT_MAPPED`. Dejarla corriendo desde la Fase A evita el problema
 de raíz: el puerto está sano salvo en las ventanas breves y deliberadas en
 que este protocolo lo rompe a propósito.
 
+**Hallazgo del tercer intento (2026-09-01) -- por qué `doctorjk-test-owner`
+y `doctorjk-test-svc` ahora son unidades REALES, no transitorias:** el
+borrador anterior registraba ambas con `systemd-run --unit=... ` (sin
+`--collect`), asumiendo -- documentado, pero nunca probado en vivo -- que
+sin ese flag la unidad queda cargada indefinidamente y `systemctl
+stop`/`restart` funcionan repetidas veces. Falso: en el tercer intento,
+tras un `systemctl stop doctorjk-test-owner` limpio, systemd la recolectó
+igual (el journal muestra `Deactivated successfully` / `Stopped`, y
+`systemctl list-unit-files` ya no la lista) antes de que el cleanup de
+`fix_puerto.sh` en B2 llegara a `restart` -- *"Unit doctorjk-test-owner.service
+not found"*. `doctorjk-test-svc`, que en ese mismo momento seguía cargada
+porque terminó `failed` (no `stopped` limpio -- un estado `failed` sí
+queda visible hasta `reset-failed`), no mostró el problema, lo que hizo
+más fácil pasarlo por alto en la ronda anterior. La diferencia real no es
+el flag `--collect`: es que un `stop` limpio a `inactive`/`dead` deja a la
+unidad transitoria sin nada que la retenga, y el recolector de basura de
+systemd la descarga en la siguiente oportunidad -- una ventana de tiempo,
+no un evento inmediato, así que corridas anteriores pudieron no haber
+tardado lo suficiente entre el `stop` y el siguiente `restart` para
+exponerlo.
+
+Esto habría repetido el mismo fallo en la Fase C real (`port_occupied`
+depende exactamente del patrón `stop` dueño → ... → `restart` dueño). La
+corrección: `doctorjk-test-owner` y `doctorjk-test-svc` pasan a ser
+**unidades reales efímeras** bajo `/run/systemd/system/*.service`
+(`root:root`, `0644`) en vez de transitorias vía `systemd-run` -- el mismo
+mecanismo que usa cualquier unidad instalada de verdad, solo que vive en
+`/run` (tmpfs) y desaparece con un reboot o al borrarla explícitamente, sin
+tocar `/etc/systemd/system/`. Cargada así, `stop`/`restart` se comportan
+exactamente como sobre un servicio de producción -- porque **no hay
+recolector de transitorias de por medio**. Consecuencia deliberada
+(pedido explícito, no un detalle): **`fix_puerto.sh` y `fix_servicio.sh`
+nunca necesitan recrear nada** -- prueban el mismo `systemctl restart`
+que corren en producción, sin ningún workaround de prueba escondido en el
+camino que valida.
+
 Preparación (sin provocar nada todavía):
 
 ```bash
 tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
+  cat <<'UNIT' | sudo tee /run/systemd/system/doctorjk-test-svc.service > /dev/null
+[Unit]
+Description=Doctor J/K Gate 4.4 -- servicio sintetico para service_failed
+
+[Service]
+ExecStart=/bin/sleep infinity
+Restart=no
+UNIT
+  cat <<'UNIT' | sudo tee /run/systemd/system/doctorjk-test-owner.service > /dev/null
+[Unit]
+Description=Doctor J/K Gate 4.4 -- dueno sintetico del puerto 18080
+
+[Service]
+ExecStart=/usr/bin/python3 -m http.server 18080 --bind 127.0.0.1
+Restart=no
+UNIT
+  sudo chown root:root /run/systemd/system/doctorjk-test-svc.service /run/systemd/system/doctorjk-test-owner.service
+  sudo chmod 0644 /run/systemd/system/doctorjk-test-svc.service /run/systemd/system/doctorjk-test-owner.service
+  sudo systemctl daemon-reload
   # doctorjk-test-svc: sleep sano, se deja activa (se provoca con kill -9 más adelante).
-  sudo systemd-run --unit=doctorjk-test-svc --property=Restart=no sleep infinity
-  # doctorjk-test-owner: se registra y se deja CORRIENDO -- ver nota arriba.
-  sudo systemd-run --unit=doctorjk-test-owner python3 -m http.server 18080 --bind 127.0.0.1
+  sudo systemctl start doctorjk-test-svc
+  # doctorjk-test-owner: se deja CORRIENDO -- ver nota arriba.
+  sudo systemctl start doctorjk-test-owner
 "
 ```
 
@@ -802,7 +857,13 @@ no muta nada, y se limpia antes de pasar al siguiente (excepto
   (c):** el script exige `$1` = punto de montaje; sin argumento falla con
   "uso: fix_disco.sh <punto-de-montaje>", ni siquiera llega a mirar
   `dry_run`) → confirmar `[DRY-RUN]` y que el archivo sigue ahí → cleanup:
-  `sudo rm -f /var/log/doctorjk-test.log.1.gz`.
+  `sudo rm -f /var/log/doctorjk-test.log.1.gz`. **Este sub-paso corre
+  directo contra el `/var/log` real del VPS, sin aislar nada -- es seguro
+  porque `dry_run=true` nunca llega a `rm` de verdad** (confirmado en el
+  tercer intento: el script listó 28 candidatos reales de `/var/log/nginx`,
+  `/var/log/postgresql`, etc., y no tocó ninguno). El aislamiento del
+  hallazgo del tercer intento (ver antes de la Fase C, más abajo) hace
+  falta recién cuando `dry_run=false` -- acá no aplica.
 - `fix_puerto.sh`: **corrección del hallazgo (1) -- orden exacto, porque
   `doctorjk-test-owner` sigue escuchando en 18080 desde la Fase A y el
   ocupante no puede enlazar el mismo puerto:**
@@ -816,7 +877,11 @@ no muta nada, y se limpia antes de pasar al siguiente (excepto
      `doctorjk-test-owner`).
   4. Cleanup: `sudo systemctl stop doctorjk-test-occupier` (la recolecta
      sola por el `--collect`), luego `sudo systemctl restart
-     doctorjk-test-owner`.
+     doctorjk-test-owner` -- **ahora confiable** (hallazgo del tercer
+     intento, ver tabla de §9.2.1): `doctorjk-test-owner` es una unidad
+     real bajo `/run/systemd/system/`, no transitoria, así que no hay
+     ventana de recolección de basura entre el `stop` de arriba y este
+     `restart`.
   5. Verificar salud antes de seguir con el siguiente sub-paso de B2:
      `ss -tln` muestra 18080 con el PID de `doctorjk-test-owner` — el
      puerto no puede quedar sin dueño entrando a los sub-pasos de disco o
@@ -902,6 +967,177 @@ tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
 en B2 ya la dejó corriendo de nuevo al cerrar, como su propio paso 4 y 5
 -- no queda pendiente de esta transición.)
 
+#### 9.2.3bis Aislamiento de `/var/log` y del journal antes de ejecutar `fix_disco.sh` real (hallazgo del tercer intento)
+
+**Cuándo aplica esto -- ventana estrecha, no toda la Fase C (corrección
+propia, encontrada al escribir este registro, antes de cualquier
+ejecución):** el `BindPaths` de más abajo aísla `/var/log` Y
+`/run/log/journal` para **todo** `doctorjk.service`, no solo para
+`fix_disco.sh` -- `recolector.py` llama `journalctl` directamente como
+subproceso del propio `doctorjk.service` (ver `doctorjk/recolector.py`)
+para juntar evidencia de **cualquier** tipo de incidente, no solo
+`disk_full`. Si este aislamiento quedara activo durante toda la Fase C, la
+recolección de evidencia de `service_failed`, `port_occupied` y
+`memory_low` vería un journal vacío/aislado en vez del real, rompiendo
+esos tres escenarios sin necesidad. La ventana correcta es: montar el
+`BindPaths` **inmediatamente antes** del escenario (b), y retirarlo
+**inmediatamente después** de su cleanup, antes de seguir con (c). El
+orden de los 4 escenarios de la Fase C ya pone a `disk_full` segundo
+-- ver más abajo -- así que la ventana aislada queda acotada a ese único
+sub-paso.
+
+**Hallazgo:** en B2 (sub-paso anterior), `fix_disco.sh` en dry-run listó 28
+candidatos reales bajo `/var/log` -- `nginx/access.log.*.gz`,
+`postgresql/postgresql-16-main.log.2.gz`, `auth.log.*.gz`, `kern.log.*`,
+`apt/*.gz`, `fail2ban.log.*.gz`, etc. Inofensivo en dry-run (nunca llega a
+`rm`), pero la Fase C (b) corre el mismo script con `dry_run=false`: sin
+aislar, borraría logs legítimos de un VPS compartido con Nginx +
+PostgreSQL reales. **Prohibido ejecutar el escenario real de disco sin
+aislamiento verificado.**
+
+**Cómo funciona el almacenamiento de journald (investigado para diseñar el
+aislamiento, no asumido):** `Storage=` en `journald.conf` (default `auto`)
+decide el destino. En `auto`: si `/var/log/journal/` existe, se usa
+almacenamiento persistente ahí (`/var/log/journal/<machine-id>/`); si no
+existe, cae a volátil bajo `/run/log/journal/<machine-id>/`.
+`Storage=persistent` fuerza siempre `/var/log/journal` (creándolo si
+falta); `Storage=volatile` fuerza siempre `/run/log/journal`.
+`journalctl --vacuum-size=SIZE` sin `--root`/`-D`/`--file` -- como lo
+llama `fix_disco.sh` -- actúa sobre el directorio que esté efectivamente
+en uso. **Cuál de los dos modos usa este VPS todavía no está confirmado
+por lectura directa**, así que aislar solo `/var/log` no alcanza: si el
+journal fuera volátil, `/run/log/journal` queda completamente afuera y
+`--vacuum-size` seguiría tocando el journal real del host. Se aíslan las
+dos rutas.
+
+**Mecanismo -- `BindPaths` efímero sobre `doctorjk.service`:**
+`doctorjk.service` YA corre con `ProtectSystem=strict` (namespace de
+montaje privado activo por diseño, ver `instalador/doctorjk.service`), con
+`/var/log` como una de las dos únicas rutas escribibles
+(`ReadWritePaths=/var/lib/doctorjk /var/log`) -- exactamente la ruta a
+remapear. Un drop-in agrega `BindPaths=` para redirigir esa ruta (y la del
+journal volátil) hacia directorios de prueba en disco, dentro del mismo
+namespace que ya existe -- no hace falta crear un namespace nuevo,
+`BindPaths` lo reusa. `sudo -n fix_disco.sh`, como hijo del proceso de
+`doctorjk.service`, hereda ese namespace igual que hereda el resto del
+hardening (mismo razonamiento que el propio comentario de
+`ReadWritePaths` en `instalador/doctorjk.service`: los namespaces de
+montaje se heredan por fork/exec, y `sudo` no los levanta aunque el hijo
+pase a UID 0).
+
+`/run/systemd/system/doctorjk.service.d/99-gate44-aislar-logs.conf`:
+```ini
+[Service]
+# Efimero (Gate 4.4): redirige /var/log y /run/log/journal, DENTRO del
+# namespace de doctorjk.service y sus hijos (incluidos los scripts de Modo
+# 2 via "sudo -n"), hacia directorios de prueba en disco. Ningun archivo
+# real del host queda visible ni escribible desde ahi. df / no se ve
+# afectado -- el bind es sobre subdirectorios, nunca sobre / -- asi que
+# sigue midiendo el filesystem raiz real.
+BindPaths=/var/tmp/doctorjk-gate4-varlog:/var/log
+BindPaths=/var/tmp/doctorjk-gate4-runlog-journal:/run/log/journal
+```
+
+Preparación:
+
+```bash
+tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
+  # Manifest ANTES -- referencia para confirmar en la Fase E que el
+  # /var/log real del host no cambió ni un byte durante toda la ventana
+  # aislada.
+  sudo find /var/log -type f -printf '%p %s %T@\n' | sort | sha256sum \
+    > /tmp/doctorjk-varlog-manifest-antes.sha256
+  cat /tmp/doctorjk-varlog-manifest-antes.sha256
+
+  sudo mkdir -p /var/tmp/doctorjk-gate4-varlog /var/tmp/doctorjk-gate4-runlog-journal
+  # Decoy: un log activo, sin sufijo de rotación, que fix_disco.sh NUNCA
+  # debe tocar -- confirma que el patrón sigue discriminando bien dentro
+  # del directorio aislado, no solo que el filler se borra.
+  echo 'log activo, no debe borrarse' | sudo tee /var/tmp/doctorjk-gate4-varlog/app.log > /dev/null
+
+  sudo mkdir -p /run/systemd/system/doctorjk.service.d
+  cat <<'DROPIN' | sudo tee /run/systemd/system/doctorjk.service.d/99-gate44-aislar-logs.conf > /dev/null
+[Service]
+BindPaths=/var/tmp/doctorjk-gate4-varlog:/var/log
+BindPaths=/var/tmp/doctorjk-gate4-runlog-journal:/run/log/journal
+DROPIN
+  sudo systemctl daemon-reload
+  sudo systemctl restart doctorjk.service
+"
+```
+
+**Verificación OBLIGATORIA -- gate antes de autorizar `dry_run=false` sobre
+`fix_disco.sh`. Si cualquiera de estos chequeos no confirma aislamiento
+total, NO se ejecuta el escenario real de disco: se documenta como no
+ejecutado por esta razón y se sigue con los otros 3 escenarios de la Fase
+C (servicio, puerto, memoria) y con la Fase D -- perder un escenario real
+es aceptable; borrar un log de producción no lo es.**
+
+```bash
+tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
+  echo '--- sintaxis del drop-in ---'
+  sudo systemd-analyze verify doctorjk.service
+
+  echo '--- que ve REALMENTE el namespace del servicio (autoridad final) ---'
+  pid=\$(systemctl show doctorjk.service -p MainPID --value)
+  sudo nsenter --mount=/proc/\$pid/ns/mnt -- ls -la /var/log
+  sudo nsenter --mount=/proc/\$pid/ns/mnt -- ls -la /run/log/journal 2>&1
+
+  echo '--- df / sigue midiendo la raiz real (no debe moverse por el bind) ---'
+  df -h /
+"
+```
+
+Criterio de aprobación, los tres a la vez:
+
+1. `systemd-analyze verify` no reporta error sobre el drop-in.
+2. `ls /var/log` desde el namespace muestra **solo** `app.log` (el decoy)
+   -- ningún `nginx/`, `postgresql/`, `auth.log`, `kern.log`, etc. real.
+   Lo mismo para `/run/log/journal` (vacío, o solo lo que el propio
+   journald del namespace haya podido crear ahí -- nunca los directorios
+   de machine-id reales del host).
+3. `df -h /` coincide con la línea base de §9.1 -- confirma que el bind no
+   movió la medición de la raíz.
+
+Si el punto 2 muestra cualquier archivo que no sea el decoy, o si
+`/run/log/journal` no existe como destino de bind válido y systemd lo
+reporta como error de montaje: **parar, no autorizar la ejecución real de
+`fix_disco.sh`, no inventar un mecanismo alternativo en el momento.**
+
+El filler real de la Fase C (b) se crea dentro de
+`/var/tmp/doctorjk-gate4-varlog/`, nunca directo en `/var/log` -- el
+namespace lo hace aparecer en `/var/log` para `fix_disco.sh`, pero el
+archivo físico vive en `/var/tmp`, en el mismo filesystem raíz que mide
+`df /` (VPS de una sola partición, §9.1), así que sigue contando para
+cruzar el umbral.
+
+**Retiro del aislamiento -- inmediatamente después del cleanup del
+escenario (b), ANTES de (c), incluida la verificación de integridad final
+(no esperar a la Fase E: fail fast, igual que cualquier otro chequeo de
+salud de este protocolo):**
+
+```bash
+tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
+  sudo rm -rf /run/systemd/system/doctorjk.service.d
+  sudo systemctl daemon-reload
+  sudo systemctl restart doctorjk.service
+  sudo rm -rf /var/tmp/doctorjk-gate4-varlog /var/tmp/doctorjk-gate4-runlog-journal
+
+  sudo find /var/log -type f -printf '%p %s %T@\n' | sort | sha256sum \
+    > /tmp/doctorjk-varlog-manifest-despues.sha256
+  diff /tmp/doctorjk-varlog-manifest-antes.sha256 /tmp/doctorjk-varlog-manifest-despues.sha256 \
+    && echo 'MANIFEST IDÉNTICO: /var/log real intacto' \
+    || echo 'DIVERGENCIA: PARAR -- no seguir con (c) hasta entenderla'
+  sudo rm -f /tmp/doctorjk-varlog-manifest-antes.sha256 /tmp/doctorjk-varlog-manifest-despues.sha256
+"
+```
+
+Verificar antes de seguir con (c): `sudo ls /var/log | head` muestra los
+directorios reales del host (`nginx`, `postgresql`, etc.), no el decoy --
+confirma que la vista real volvió, y el manifest de arriba dio idéntico.
+Si el escenario (b) se saltó por no
+haber aprobado el gate, este bloque no hace falta (nada quedó montado).
+
 #### 9.2.4 Fase C — 4 escenarios reales, secuenciales (`dry_run=false`, `auto_fix=true`)
 
 ```bash
@@ -948,18 +1184,47 @@ edit. Se la deja **activa** (ya sana) hasta la Fase E: recién ahí, con
 original, se la detiene. Salud de este paso: la unidad quedó `active`, no
 `failed`.
 
-**(b) `disk_full`** — recalcular el filler (mismo bloque de §9.2.1, el
-disco ya pudo variar) y crearlo. Confirmar remediación real: el script
-lista el candidato, lo borra, la postcondición pasa. **Idempotencia
-directa:** `sudo -n /opt/doctorjk/scripts-fix/fix_disco.sh /` con el disco
-ya bajo el umbral (corrección del hallazgo (c): siempre con el argumento
-`/`) → "ya está bajo el umbral" sin acción. Cleanup: confirmar que no
-queda ningún `doctorjk-test.log*` residual (ya lo borró el propio script).
-Salud: `df` vuelve a ~3%.
+**(b) `disk_full`** — **secuencia completa de §9.2.3bis, autocontenida en
+este único sub-paso (hallazgo propio: el aislamiento rompe la recolección
+de evidencia de los otros 3 escenarios si queda montado más tiempo del
+necesario -- ver la nota "Cuándo aplica esto" al inicio de esa sección):**
+
+1. Manifest antes + montar el `BindPaths` (bloque "Preparación" de
+   §9.2.3bis).
+2. Verificación obligatoria (bloque "Verificación OBLIGATORIA" de
+   §9.2.3bis) -- **gate: si no confirma aislamiento total, se salta este
+   escenario por completo, se documenta el motivo, y se sigue directo con
+   (c) sin haber montado nada que retirar.**
+3. Con el gate aprobado: recalcular el filler (mismo bloque de §9.2.1, el
+   disco ya pudo variar) y crearlo **dentro de
+   `/var/tmp/doctorjk-gate4-varlog/`** (nunca directo en `/var/log`), con
+   el mismo nombre y mtime de siempre para que el patrón de
+   `fix_disco.sh` lo reconozca.
+4. Confirmar remediación real: el script lista el candidato, lo borra, la
+   postcondición pasa. **Idempotencia directa:**
+   `sudo -n /opt/doctorjk/scripts-fix/fix_disco.sh /` con el disco ya bajo
+   el umbral (corrección del hallazgo (c): siempre con el argumento `/`)
+   → "ya está bajo el umbral" sin acción.
+5. **Verificación del decoy (hallazgo del tercer intento):** `app.log`
+   (el decoy de §9.2.3bis) sigue existiendo con su contenido intacto --
+   confirma que el patrón de borrado discriminó bien también en ejecución
+   real, no solo en dry-run.
+6. Cleanup del filler: confirmar que no queda ningún `doctorjk-test.log*`
+   residual dentro del directorio aislado (ya lo borró el propio script).
+7. **Retiro del aislamiento** (bloque "Retiro del aislamiento" de
+   §9.2.3bis) -- obligatorio antes de pasar a (c), con o sin gate
+   aprobado en el paso 2.
+
+Salud de este sub-paso: `df` vuelve a ~3% (mide la raíz real, el bind no
+lo afecta) Y, tras el paso 7, `/var/log` real vuelve a ser visible desde
+el namespace del servicio.
 
 **(c) `port_occupied`** — `doctorjk-test-owner` está corriendo desde la
 Fase A (§9.2.1); hay que liberar el puerto ANTES de poder crear el
-ocupante, los dos no pueden enlazar 18080 a la vez:
+ocupante, los dos no pueden enlazar 18080 a la vez. Este es exactamente el
+patrón stop-luego-restart-por-separado que expuso el hallazgo del tercer
+intento -- confiable ahora porque `doctorjk-test-owner` es una unidad real
+bajo `/run/systemd/system/`, no transitoria (ver tabla de §9.2.1):
 
 1. `sudo systemctl stop doctorjk-test-owner`.
 2. Recrear el ocupante (corrección del hallazgo (b): `systemd-run
@@ -1055,34 +1320,80 @@ agente ya corriendo la config original (`servicios_vigilados` sin
 `doctorjk-test-svc`, `auto_fix=false`) es seguro detener las unidades de
 prueba -- si se detuvieran antes, con la config temporal todavía activa y
 los intervalos rápidos de la Fase A, el propio monitor podría reaccionar a
-mitad de este bloque.
+mitad de este bloque. **Hallazgo del tercer intento:** el drop-in de
+aislamiento de `/var/log` (§9.2.3bis) ya debería estar retirado desde el
+cierre del escenario (b) de la Fase C -- el `rm -rf` de ese directorio acá
+es un respaldo idempotente (no falla si ya no existe), no el punto
+principal de remoción. Si por algún aborto llegó hasta acá todavía
+montado, este mismo bloque lo retira junto con la config: un solo
+`daemon-reload` + `restart` alcanza para que `doctorjk.service` vuelva a
+la config original Y a ver el `/var/log` real a la vez.
 
 ```bash
 tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
   sudo cp /etc/doctorjk/config.toml.bak-gate44 /etc/doctorjk/config.toml
+  sudo rm -rf /run/systemd/system/doctorjk.service.d
+  sudo systemctl daemon-reload
   sudo systemctl restart doctorjk.service
   sudo systemctl stop doctorjk-test-llmstub doctorjk-test-owner \
     doctorjk-test-svc doctorjk-test-memhog 2>/dev/null || true
   sudo systemctl reset-failed doctorjk-test-svc 2>/dev/null || true
+  sudo rm -f /run/systemd/system/doctorjk-test-owner.service \
+    /run/systemd/system/doctorjk-test-svc.service
+  sudo systemctl daemon-reload
   sudo rm -f /run/doctorjk-test-memhog.marker \
-    /var/log/doctorjk-test.log.1.gz /tmp/doctorjk-llmstub.py /tmp/doctorjk-filler-kb
+    /var/log/doctorjk-test.log.1.gz /tmp/doctorjk-llmstub.py \
+    /tmp/doctorjk-memhog.py /tmp/doctorjk-filler-kb
+  sudo rm -rf /var/tmp/doctorjk-gate4-varlog /var/tmp/doctorjk-gate4-runlog-journal
   systemctl list-units --all 'doctorjk-test-*' --no-pager
+  systemctl list-unit-files --all 'doctorjk-test-*' --no-pager
 "
 ```
 
 (`doctorjk-test-occupier` no aparece en este `stop`: ya fue recolectada
-sola por su propio `--collect` en la Fase C.)
+sola por su propio `--collect` en la Fase C. `doctorjk-test-owner` y
+`doctorjk-test-svc` sí necesitan el `rm` explícito de su unit file --
+hallazgo del tercer intento: al ser unidades reales, no transitorias, no
+desaparecen solas con un `stop`, hay que borrar el archivo y recargar.)
 
-Las unidades `doctorjk-test-*` quedan detenidas y sin marcador; al ser
-transitorias nunca se escribieron a disco, así que un reboot del VPS las
-borraría igual aunque algo de esto fallara. `.env` nunca se tocó (hallazgo
-(f)), así que no hay nada que restaurar ahí. Verificación final: los
-mismos 5 chequeos de §9.1 (servicios reales activos, carga, disco ~3%,
-memoria ~8.9 GiB libres, `config.toml` con `modo_remediacion="diagnostico"`,
-`auto_fix=false`, `dry_run=true`, `unidad_memoria_aprobada=""`,
-`ocupantes_puerto_aprobados=[]`, `puntos_montaje_vigilados=["/"]` como
-estaba) más `systemctl list-units --all 'doctorjk-test-*'` vacío o todo
-`inactive`.
+**Verificación de integridad de `/var/log` real -- respaldo, no el chequeo
+principal:** el escenario (b) de la Fase C (§9.2.3bis, bloque "Retiro del
+aislamiento") ya corre este mismo diff inmediatamente después de retirar
+el `BindPaths`, antes de seguir con (c) -- fail fast, no esperar a la
+Fase E para descubrir una divergencia. Este bloque es solo una red por si
+el protocolo se abortó a mitad del escenario (b), antes de llegar a ese
+paso, dejando el manifest "antes" sin comparar:
+
+```bash
+tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
+  if [[ -f /tmp/doctorjk-varlog-manifest-antes.sha256 ]]; then
+    sudo find /var/log -type f -printf '%p %s %T@\n' | sort | sha256sum \
+      > /tmp/doctorjk-varlog-manifest-despues.sha256
+    diff /tmp/doctorjk-varlog-manifest-antes.sha256 /tmp/doctorjk-varlog-manifest-despues.sha256 \
+      && echo 'MANIFEST IDÉNTICO: /var/log real intacto' \
+      || echo 'DIVERGENCIA: revisar antes de continuar'
+    sudo rm -f /tmp/doctorjk-varlog-manifest-antes.sha256 /tmp/doctorjk-varlog-manifest-despues.sha256
+  else
+    echo 'sin manifest pendiente -- ya se verificó en el escenario (b), o el aislamiento nunca se usó en este intento'
+  fi
+"
+```
+
+Un `diff` con salida (cualquier línea) es una divergencia real -- pararse
+ahí y no dar la Fase E por terminada hasta entenderla, igual que cualquier
+otro chequeo de salud de este protocolo.
+
+Las unidades `doctorjk-test-*` quedan detenidas, sin unit files y sin
+marcador. `.env` nunca se tocó (hallazgo (f)), así que no hay nada que
+restaurar ahí. Verificación final: los mismos 5 chequeos de §9.1
+(servicios reales activos, carga, disco ~3%, memoria ~8.9 GiB libres,
+`config.toml` con `modo_remediacion="diagnostico"`, `auto_fix=false`,
+`dry_run=true`, `unidad_memoria_aprobada=""`, `ocupantes_puerto_aprobados=[]`,
+`puntos_montaje_vigilados=["/"]` como estaba) más `systemctl list-units
+--all 'doctorjk-test-*'` vacío o todo `inactive`, `systemctl
+list-unit-files --all 'doctorjk-test-*'` sin las unidades reales de
+`doctorjk-test-owner`/`doctorjk-test-svc`, y el manifest de `/var/log`
+idéntico antes/después si se usó el aislamiento.
 
 ### 9.3 Lo que este protocolo NO hace
 
@@ -1339,3 +1650,91 @@ lo que el test siempre quiso probar. Suite completa: 319/319 (antes 315).
 **No probado en el VPS real todavía** -- se suma a los dos fixes de
 `comun.sh` de §9.5 como parte de lo que el próximo Paso 0 ejercita por
 primera vez ahí.
+
+### 9.7 Tercer intento real en el VPS (2026-09-01) — Paso 0, Fase A y B2 completos; parado en el cleanup de `fix_puerto.sh` por un hallazgo nuevo
+
+Ejecutado con punto de control explícito de MauItu: intento completo de
+Paso 0 + Fase A + B2 dry-run (B1 no se repitió, solo el smoke mínimo de
+provocar `doctorjk-test-svc` para la precondición de `fix_servicio.sh`).
+Preflight en verde: timer de `apt-daily-upgrade` a 18h de distancia,
+rollback confirmado, línea base idéntica a §9.1, sin unidades/backups
+residuales de intentos anteriores.
+
+**Completo y verificado -- primera vez en el VPS real para los tres fixes
+de código de esta sesión (allowlist de mounts, aritmética octal de
+`comun.sh`, `Path()` en `read_config_attr`):** Paso 0 (deploy, sin claves
+nuevas que migrar -- ya estaban de la ronda anterior --, validación real,
+backup post-migración). Fase A (unidades sintéticas, filtro de mounts
+confirmado antes de bajar `disco_pct`). B2 completo hasta el cleanup de
+`fix_puerto.sh`: `fix_servicio.sh` dry-run OK, `fix_disco.sh` dry-run OK
+(listó 28 candidatos reales de `/var/log` sin tocar ninguno -- el hallazgo
+que motivó §9.2.3bis), `fix_puerto.sh` dry-run OK. El `kill -9` de
+`doctorjk-test-svc` disparó de paso el pipeline completo real (no
+buscado, pero confirma que el smoke de B1 sigue sano): detectado
+11:53:45, confirmado 11:53:51, informe generado 11:54:51 vía el stub, sin
+mutación real. Evidencia capturada, informe borrado antes de la
+restauración.
+
+**Se paró en el cleanup de `fix_puerto.sh`** (`sudo systemctl restart
+doctorjk-test-owner` tras el `stop` del mismo sub-paso): *"Unit
+doctorjk-test-owner.service not found"*. Investigado en el momento (solo
+lectura): el journal mostró un `stop` limpio (`Deactivated successfully` /
+`Stopped`) seguido de la desaparición total de la unidad de
+`systemctl list-unit-files` -- systemd la recolectó como transitoria pese
+a haberse registrado sin `--collect`, contradiciendo lo que la versión
+anterior de este protocolo daba por probado. `doctorjk-test-svc`, que en
+ese momento seguía `failed` (nunca se detuvo limpio), no mostró el
+problema -- la diferencia real es el `stop` limpio a `inactive`, no el
+flag `--collect`. Detalle completo y la corrección (unidades reales bajo
+`/run/systemd/system/`) en la tabla de §9.2.1.
+
+**Restaurado y verificado:** config repuesta, `doctorjk.service`
+reiniciado, unidades de prueba detenidas y limpias (incluida la unidad
+`doctorjk-test-owner` ya recolectada, que no necesitó `rm` porque
+literalmente no existía), sin filler/marcador/temporales, sin informes
+espurios. Estado final idéntico a la línea base: 6 servicios reales +
+`doctorjk`/`trigger` activos, carga ~0, disco 3%, memoria ~8.9 GiB
+libres. Ningún push/merge, ninguna llamada a Cloudflare, ningún servicio
+real tocado, ninguna Fase C ni D ejecutada.
+
+**Segundo hallazgo, encontrado por revisión propia al escribir este
+registro, no por ejecución en vivo:** B2 (`fix_disco.sh` en dry-run) listó
+28 candidatos REALES bajo `/var/log` -- `nginx/`, `postgresql/`,
+`auth.log`, etc. Inofensivo en dry-run, pero la Fase C corre el mismo
+script con `dry_run=false`: sin aislar, habría borrado logs legítimos del
+VPS compartido en el intento siguiente. Se revisó antes de que llegara a
+ejecutarse, no después de un daño real.
+
+**Corregido en el protocolo, ambos hallazgos, todavía no probado en el
+VPS:**
+
+1. `doctorjk-test-owner` y `doctorjk-test-svc` pasan a ser unidades reales
+   efímeras bajo `/run/systemd/system/*.service` (§9.2.1) -- `stop`/`restart`
+   se comportan como sobre un servicio de producción, sin ningún
+   recolector de transitorias de por medio, y ningún script de Modo 2
+   necesita recrear nada: prueban el mismo `systemctl restart` que corren
+   en producción.
+2. Aislamiento de `/var/log` y de `/run/log/journal` con un `BindPaths`
+   efímero sobre `doctorjk.service` (§9.2.3bis), aprovechando el
+   `ProtectSystem=strict` que la unidad ya tiene -- investigado y
+   documentado ahí cómo decide `journald` entre almacenamiento persistente
+   y volátil, y por qué aislar solo `/var/log` no alcanza. Verificación
+   obligatoria vía `nsenter` al namespace real del proceso (no solo leer
+   la config del drop-in) antes de autorizar la ejecución real de
+   `fix_disco.sh`, con gate explícito: si no se puede confirmar el
+   aislamiento, no se ejecuta ese escenario, se documenta como saltado, y
+   se sigue con los otros tres. Ventana acotada al escenario (b) nada más
+   (hallazgo propio, encontrado en revisión antes de correr nada:
+   `recolector.py` llama `journalctl` para CUALQUIER incidente, así que
+   dejar el aislamiento montado durante toda la Fase C habría roto la
+   evidencia de los otros tres escenarios) -- se monta, se verifica, se
+   usa y se retira dentro del propio sub-paso (b), con manifest hash de
+   `/var/log` real antes/después verificado ahí mismo (fail fast), no
+   diferido a la Fase E.
+
+**Pendiente antes de un cuarto intento:** ninguno de los dos mecanismos
+nuevos (unidades reales efímeras, aislamiento de `/var/log`/journal) se
+probó todavía en el VPS -- el próximo Paso 0/Fase A los ejercita por
+primera vez ahí. Retomar desde el cleanup de `fix_puerto.sh` en B2 (el
+resto de B2, la transición a Fase C, y las Fases C/D/E completas no se
+llegaron a correr) con Fase A repetida desde cero.
