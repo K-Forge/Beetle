@@ -23,16 +23,28 @@
 from __future__ import annotations
 
 import os
-import stat
 import subprocess
 import time
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).parent.parent.parent
-FIX_PUERTO = REPO_ROOT / "scripts-fix" / "fix_puerto.sh"
-FIX_DISCO = REPO_ROOT / "scripts-fix" / "fix_disco.sh"
-FIX_SERVICIO = REPO_ROOT / "scripts-fix" / "fix_servicio.sh"
-FIX_MEMORIA = REPO_ROOT / "scripts-fix" / "fix_memoria.sh"
+from ayudantes import (
+    FAKE_DF,
+    FAKE_FIND,
+    FAKE_FREE,
+    FAKE_JOURNALCTL,
+    FAKE_SLEEP,
+    FAKE_SS,
+    FAKE_SS_OCUPADO,
+    FAKE_SYSTEMCTL,
+    FAKE_SYSTEMCTL_MEMORIA,
+    FAKE_SYSTEMCTL_PUERTO_OCUPADO,
+    FAKE_SYSTEMCTL_SERVICIO,
+    FIX_DISCO,
+    FIX_MEMORIA,
+    FIX_PUERTO,
+    FIX_SERVICIO,
+)
+from ayudantes import instalar_script as _instalar
 
 _FAKE_COMUN_SH = """#!/usr/bin/env bash
 # Doble de prueba de comun.sh -- NO verifica dueño/permisos de nada; la
@@ -68,40 +80,6 @@ list_contains() {
 }
 """
 
-_FAKE_SS = """#!/usr/bin/env bash
-# Nadie escucha en la primera llamada (precondición); alguien escucha desde
-# la segunda en adelante (postcondición, simulando que systemctl restart
-# de verdad hizo bind del puerto).
-count_file="$FAKE_STATE_DIR/ss_calls"
-count=0
-[[ -f "$count_file" ]] && count="$(cat "$count_file")"
-count=$((count + 1))
-echo "$count" > "$count_file"
-echo "State  Recv-Q Send-Q  Local Address:Port  Peer Address:Port Process"
-if (( count >= 2 )); then
-  echo "LISTEN 0 128 0.0.0.0:${TEST_PORT} 0.0.0.0:* users:((\\"proc\\",pid=4242,fd=3))"
-fi
-"""
-
-_FAKE_SYSTEMCTL = """#!/usr/bin/env bash
-echo "$*" >> "$FAKE_STATE_DIR/systemctl_calls"
-case "$1" in
-  is-active) exit 0 ;;
-  status) echo "\xe2\x97\x8f ${TEST_EXPECTED_UNIT} - fake unit"; exit 0 ;;
-  restart|stop) exit 0 ;;
-  *) exit 0 ;;
-esac
-"""
-
-_FAKE_SLEEP = """#!/usr/bin/env bash
-exit 0
-"""
-
-
-def _instalar(ruta: Path, contenido: str) -> None:
-    ruta.write_text(contenido, encoding="utf-8")
-    ruta.chmod(ruta.stat().st_mode | stat.S_IEXEC)
-
 
 def test_fix_puerto_reinicia_y_verifica_aunque_nadie_escuche_al_empezar(tmp_path: Path):
     # Revisión post-commit (2026-09-01): si el ocupante indebido ya
@@ -116,9 +94,9 @@ def test_fix_puerto_reinicia_y_verifica_aunque_nadie_escuche_al_empezar(tmp_path
 
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
-    _instalar(fake_bin / "ss", _FAKE_SS)
-    _instalar(fake_bin / "systemctl", _FAKE_SYSTEMCTL)
-    _instalar(fake_bin / "sleep", _FAKE_SLEEP)
+    _instalar(fake_bin / "ss", FAKE_SS)
+    _instalar(fake_bin / "systemctl", FAKE_SYSTEMCTL)
+    _instalar(fake_bin / "sleep", FAKE_SLEEP)
 
     fake_state = tmp_path / "estado"
     fake_state.mkdir()
@@ -155,9 +133,9 @@ def test_fix_puerto_en_dry_run_solo_anuncia_aunque_nadie_escuche(tmp_path: Path)
 
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
-    _instalar(fake_bin / "ss", _FAKE_SS)
-    _instalar(fake_bin / "systemctl", _FAKE_SYSTEMCTL)
-    _instalar(fake_bin / "sleep", _FAKE_SLEEP)
+    _instalar(fake_bin / "ss", FAKE_SS)
+    _instalar(fake_bin / "systemctl", FAKE_SYSTEMCTL)
+    _instalar(fake_bin / "sleep", FAKE_SLEEP)
 
     fake_state = tmp_path / "estado"
     fake_state.mkdir()
@@ -187,44 +165,6 @@ def test_fix_puerto_en_dry_run_solo_anuncia_aunque_nadie_escuche(tmp_path: Path)
     ).read_text(encoding="utf-8")
 
 
-# ss ya muestra un ocupante indebido en la primera llamada (precondición);
-# desde la segunda, muestra a la unidad esperada con OTRO pid (postcondición,
-# simulando que systemctl restart de verdad hizo bind del puerto).
-_FAKE_SS_OCUPADO = """#!/usr/bin/env bash
-count_file="$FAKE_STATE_DIR/ss_calls"
-count=0
-[[ -f "$count_file" ]] && count="$(cat "$count_file")"
-count=$((count + 1))
-echo "$count" > "$count_file"
-echo "State  Recv-Q Send-Q  Local Address:Port  Peer Address:Port Process"
-if (( count == 1 )); then
-  echo "LISTEN 0 128 0.0.0.0:${TEST_PORT} 0.0.0.0:* users:((\\"proc\\",pid=4242,fd=3))"
-else
-  echo "LISTEN 0 128 0.0.0.0:${TEST_PORT} 0.0.0.0:* users:((\\"proc\\",pid=5555,fd=3))"
-fi
-"""
-
-# unit_for_pid() distingue por el pid que le pasan: 4242 -> ocupante, otro
-# pid -> unidad esperada -- así el test puede distinguir a quién identificó
-# el script en cada llamada, no solo asumir un único nombre fijo.
-_FAKE_SYSTEMCTL_PUERTO_OCUPADO = """#!/usr/bin/env bash
-echo "$*" >> "$FAKE_STATE_DIR/systemctl_calls"
-case "$1" in
-  status)
-    if [[ "$2" == "4242" ]]; then
-      echo "\xe2\x97\x8f ${TEST_OCCUPIER_UNIT} - fake unit"
-    else
-      echo "\xe2\x97\x8f ${TEST_EXPECTED_UNIT} - fake unit"
-    fi
-    exit 0
-    ;;
-  is-active) exit 0 ;;
-  restart|stop) exit 0 ;;
-  *) exit 0 ;;
-esac
-"""
-
-
 def test_fix_puerto_falla_cerrado_si_ocupante_vigilado_pero_no_aprobado(tmp_path: Path):
     # Hallazgo de auditoría P0 (2026-09-01): fix_puerto.sh NO debe autorizar
     # a detener un ocupante solo porque está en servicios_vigilados -- esa
@@ -237,9 +177,9 @@ def test_fix_puerto_falla_cerrado_si_ocupante_vigilado_pero_no_aprobado(tmp_path
 
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
-    _instalar(fake_bin / "ss", _FAKE_SS_OCUPADO)
-    _instalar(fake_bin / "systemctl", _FAKE_SYSTEMCTL_PUERTO_OCUPADO)
-    _instalar(fake_bin / "sleep", _FAKE_SLEEP)
+    _instalar(fake_bin / "ss", FAKE_SS_OCUPADO)
+    _instalar(fake_bin / "systemctl", FAKE_SYSTEMCTL_PUERTO_OCUPADO)
+    _instalar(fake_bin / "sleep", FAKE_SLEEP)
 
     fake_state = tmp_path / "estado"
     fake_state.mkdir()
@@ -284,9 +224,9 @@ def test_fix_puerto_detiene_ocupante_aprobado_aunque_no_este_vigilado(tmp_path: 
 
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
-    _instalar(fake_bin / "ss", _FAKE_SS_OCUPADO)
-    _instalar(fake_bin / "systemctl", _FAKE_SYSTEMCTL_PUERTO_OCUPADO)
-    _instalar(fake_bin / "sleep", _FAKE_SLEEP)
+    _instalar(fake_bin / "ss", FAKE_SS_OCUPADO)
+    _instalar(fake_bin / "systemctl", FAKE_SYSTEMCTL_PUERTO_OCUPADO)
+    _instalar(fake_bin / "sleep", FAKE_SLEEP)
 
     fake_state = tmp_path / "estado"
     fake_state.mkdir()
@@ -321,39 +261,6 @@ def test_fix_puerto_detiene_ocupante_aprobado_aunque_no_este_vigilado(tmp_path: 
 
 # --------------------------------------------------------------- fix_disco.sh
 
-_FAKE_DF = """#!/usr/bin/env bash
-# Primera llamada: sobre el umbral (dispara la limpieza). Segunda en
-# adelante: bajo el umbral (simula que la limpieza sí liberó espacio).
-count_file="$FAKE_STATE_DIR/df_calls"
-count=0
-[[ -f "$count_file" ]] && count="$(cat "$count_file")"
-count=$((count + 1))
-echo "$count" > "$count_file"
-echo "Use%"
-if (( count == 1 )); then
-  echo "95%"
-else
-  echo "60%"
-fi
-"""
-
-_FAKE_JOURNALCTL = """#!/usr/bin/env bash
-echo "$*" >> "$FAKE_STATE_DIR/journalctl_calls"
-exit 0
-"""
-
-_FAKE_FIND = """#!/usr/bin/env bash
-# Traduce /var/log al directorio de prueba FAKE_VAR_LOG y delega en el
-# find real -- así fix_disco.sh corre su búsqueda de verdad (mismos
-# argumentos, mismo -print0), solo que contra archivos de prueba, no el
-# filesystem real de la máquina que corre las pruebas.
-args=("$@")
-if [[ "${args[0]}" == "/var/log" ]]; then
-  args[0]="$FAKE_VAR_LOG"
-fi
-exec /usr/bin/find "${args[@]}"
-"""
-
 
 def test_fix_disco_lista_candidatos_antes_de_borrar(tmp_path: Path):
     # Gate 4.2 exige listar candidatos antes de aplicar la política de
@@ -366,9 +273,9 @@ def test_fix_disco_lista_candidatos_antes_de_borrar(tmp_path: Path):
 
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
-    _instalar(fake_bin / "df", _FAKE_DF)
-    _instalar(fake_bin / "journalctl", _FAKE_JOURNALCTL)
-    _instalar(fake_bin / "find", _FAKE_FIND)
+    _instalar(fake_bin / "df", FAKE_DF)
+    _instalar(fake_bin / "journalctl", FAKE_JOURNALCTL)
+    _instalar(fake_bin / "find", FAKE_FIND)
 
     fake_state = tmp_path / "estado"
     fake_state.mkdir()
@@ -415,9 +322,9 @@ def test_fix_disco_en_dry_run_no_borra_nada(tmp_path: Path):
 
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
-    _instalar(fake_bin / "df", _FAKE_DF)
-    _instalar(fake_bin / "journalctl", _FAKE_JOURNALCTL)
-    _instalar(fake_bin / "find", _FAKE_FIND)
+    _instalar(fake_bin / "df", FAKE_DF)
+    _instalar(fake_bin / "journalctl", FAKE_JOURNALCTL)
+    _instalar(fake_bin / "find", FAKE_FIND)
 
     fake_state = tmp_path / "estado"
     fake_state.mkdir()
@@ -452,21 +359,6 @@ def test_fix_disco_en_dry_run_no_borra_nada(tmp_path: Path):
 
 # ------------------------------------------------------------ fix_servicio.sh
 
-_FAKE_SYSTEMCTL_SERVICIO = """#!/usr/bin/env bash
-echo "$*" >> "$FAKE_STATE_DIR/systemctl_calls"
-state_file="$FAKE_STATE_DIR/service_active"
-case "$1" in
-  is-active)
-    if [[ -f "$state_file" ]]; then exit 0; else exit 3; fi
-    ;;
-  restart)
-    touch "$state_file"
-    exit 0
-    ;;
-  *) exit 0 ;;
-esac
-"""
-
 
 def _preparar_fix_servicio(tmp_path: Path, ya_activa: bool) -> tuple[Path, dict, Path]:
     scripts_dir = tmp_path / "scripts-fix"
@@ -476,8 +368,8 @@ def _preparar_fix_servicio(tmp_path: Path, ya_activa: bool) -> tuple[Path, dict,
 
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
-    _instalar(fake_bin / "systemctl", _FAKE_SYSTEMCTL_SERVICIO)
-    _instalar(fake_bin / "sleep", _FAKE_SLEEP)
+    _instalar(fake_bin / "systemctl", FAKE_SYSTEMCTL_SERVICIO)
+    _instalar(fake_bin / "sleep", FAKE_SLEEP)
 
     fake_state = tmp_path / "estado"
     fake_state.mkdir()
@@ -550,26 +442,6 @@ def test_fix_servicio_idempotente_si_ya_esta_activa(tmp_path: Path):
 
 # ------------------------------------------------------------- fix_memoria.sh
 
-_FAKE_FREE = """#!/usr/bin/env bash
-if [[ -f "$FAKE_STATE_DIR/memoria_liberada" ]]; then
-  available="${TEST_AVAILABLE_AFTER:-1000}"
-else
-  available="${TEST_AVAILABLE_BEFORE:-100}"
-fi
-echo "              total        used        free      shared  buff/cache   available"
-echo "Mem:           3900        2000         500          10         1400       $available"
-echo "Swap:             0           0           0"
-"""
-
-_FAKE_SYSTEMCTL_MEMORIA = """#!/usr/bin/env bash
-echo "$*" >> "$FAKE_STATE_DIR/systemctl_calls"
-case "$1" in
-  show) echo "${TEST_UNIT_MEMORY_BYTES:-0}" ;;
-  restart) touch "$FAKE_STATE_DIR/memoria_liberada"; exit 0 ;;
-  *) exit 0 ;;
-esac
-"""
-
 
 def _preparar_fix_memoria(tmp_path: Path, **overrides) -> tuple[Path, dict, Path]:
     scripts_dir = tmp_path / "scripts-fix"
@@ -579,9 +451,9 @@ def _preparar_fix_memoria(tmp_path: Path, **overrides) -> tuple[Path, dict, Path
 
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
-    _instalar(fake_bin / "free", _FAKE_FREE)
-    _instalar(fake_bin / "systemctl", _FAKE_SYSTEMCTL_MEMORIA)
-    _instalar(fake_bin / "sleep", _FAKE_SLEEP)
+    _instalar(fake_bin / "free", FAKE_FREE)
+    _instalar(fake_bin / "systemctl", FAKE_SYSTEMCTL_MEMORIA)
+    _instalar(fake_bin / "sleep", FAKE_SLEEP)
 
     fake_state = tmp_path / "estado"
     fake_state.mkdir()

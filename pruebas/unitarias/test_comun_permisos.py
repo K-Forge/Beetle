@@ -17,24 +17,14 @@
 from __future__ import annotations
 
 import os
-import stat
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).parent.parent.parent
-COMUN_SH = REPO_ROOT / "scripts-fix" / "comun.sh"
-
-_FAKE_STAT = """#!/usr/bin/env bash
-# stat -c '%U'|'%a' "$ruta" -- ignora la ruta real, reporta lo que el test
-# quiera vía TEST_STAT_OWNER/TEST_STAT_MODE.
-case "$2" in
-  '%U') echo "${TEST_STAT_OWNER}" ;;
-  '%a') echo "${TEST_STAT_MODE}" ;;
-esac
-"""
+from ayudantes import COMUN_SH, FAKE_STAT
+from ayudantes import instalar_script as _instalar
 
 _RUNNER_SH = """#!/usr/bin/env bash
 # Sourcear comun.sh dispara _verify_config_ownership al final del propio
@@ -45,11 +35,6 @@ echo SOURCED_OK
 """
 
 
-def _instalar(ruta: Path, contenido: str) -> None:
-    ruta.write_text(contenido, encoding="utf-8")
-    ruta.chmod(ruta.stat().st_mode | stat.S_IEXEC)
-
-
 def _fuente_comun_real(tmp_path: Path, owner: str, mode: str) -> subprocess.CompletedProcess[str]:
     scripts_dir = tmp_path / "scripts-fix"
     scripts_dir.mkdir()
@@ -57,7 +42,7 @@ def _fuente_comun_real(tmp_path: Path, owner: str, mode: str) -> subprocess.Comp
 
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
-    _instalar(fake_bin / "stat", _FAKE_STAT)
+    _instalar(fake_bin / "stat", FAKE_STAT)
 
     runner = tmp_path / "runner.sh"
     _instalar(runner, _RUNNER_SH)
@@ -172,7 +157,7 @@ def _leer_atributo_real(tmp_path: Path, atributo: str, toml_text: str) -> subpro
 
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
-    _instalar(fake_bin / "stat", _FAKE_STAT)
+    _instalar(fake_bin / "stat", FAKE_STAT)
 
     runner = tmp_path / "runner.sh"
     _instalar(runner, _RUNNER_READ_ATTR_SH)
