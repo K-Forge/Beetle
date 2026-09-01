@@ -62,10 +62,18 @@ _verify_config_ownership() {
     || fail "$CONFIG_PATH no es propiedad de root (dueño: $owner); no se confía"
   mode="$(stat -c '%a' "$CONFIG_PATH" 2>/dev/null)" \
     || fail "no pude leer el modo de $CONFIG_PATH"
-  # Últimos dos dígitos octales: grupo y otros. Ninguno debe traer el bit
-  # de escritura (2): un config.toml de grupo/otros escribible podría venir
-  # de cualquiera con acceso a ese grupo, no solo de root.
-  if (( (8#$mode / 10 % 10) & 2 || (8#$mode % 10) & 2 )); then
+  # Bit de escritura de grupo (0o020) y de otros (0o002), aislados con una
+  # máscara octal sobre el valor ya convertido por `8#$mode`. La versión
+  # anterior recalculaba `8#$mode` (una conversión octal -> decimal) y
+  # después le aplicaba /10 % 10 y % 10 como si fueran los dígitos octales
+  # originales -- son los dígitos DECIMALES del número ya convertido, no los
+  # octales de "$mode". Para el modo real que pone install.sh (0640) esto
+  # fallaba cerrado siempre (hallazgo en vivo, VPS, 2026-09-01): 8#640 = 416,
+  # y 416 % 10 = 6 trae el bit 2 encendido por pura coincidencia decimal, sin
+  # relación con el bit "otros escribible" real de 640 (que es 0). La máscara
+  # octal no tiene ese problema y además ignora correctamente cualquier bit
+  # extra de setuid/setgid/sticky que agregue un cuarto dígito a %a.
+  if (( (8#$mode & 8#020) || (8#$mode & 8#002) )); then
     fail "$CONFIG_PATH tiene permisos de escritura demasiado amplios (modo $mode); no se confía"
   fi
 }

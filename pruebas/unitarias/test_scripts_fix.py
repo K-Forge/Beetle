@@ -8,9 +8,18 @@
 # pruebas usan un DOBLE de comun.sh que expone la misma interfaz
 # (read_config_attr, is_dry_run, run_or_announce, list_contains, log, fail)
 # respaldada por variables de entorno en vez de leer un TOML real -- lo que
-# se prueba es la lógica de decisión de cada fix_*.sh, no la verificación de
-# dueño/permisos de comun.sh, que ya tiene su propia cobertura (bash -n,
-# shellcheck -x, revisión de código).
+# se prueba acá es la lógica de decisión de cada fix_*.sh, no la
+# verificación de dueño/permisos de comun.sh.
+#
+# **Esa verificación (_verify_config_ownership) SÍ tiene su propia cobertura
+# directa, contra el comun.sh real, en test_comun_permisos.py.** Hasta el
+# hallazgo de auditoría en vivo del 2026-09-01 se asumía que "bash -n,
+# shellcheck -x, revisión de código" alcanzaba para esa función -- resultó
+# falso: un bug de aritmética (mezclar la conversión octal->decimal de
+# `8#$mode` con extracción de dígitos decimales) hacía que el modo real que
+# pone install.sh (0640) fallara SIEMPRE, y ningún test lo detectó porque
+# ninguno ejecutaba la función real. `bash -n` solo valida sintaxis, nunca
+# semántica aritmética.
 from __future__ import annotations
 
 import os
