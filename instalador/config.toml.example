@@ -67,7 +67,12 @@ llm_url = "https://api.cloudflare.com/client/v4/accounts/TU_CUENTA/ai/v1/chat/co
 # Identificador fijado por CONTEXTO-IA.md §4: Cloudflare Workers AI expone
 # gpt-oss-120b bajo este namespace, no como "gpt-oss-120b" a secas.
 llm_modelo = "@cf/openai/gpt-oss-120b"
-llm_timeout_s = 30
+# 30s se quedaba corto y probocaba caídas a fallback: gpt-oss-120b es un
+# modelo de razonamiento y con evidencia real (journal de un incidente real)
+# tardó más de 30s varias veces en una prueba contra Cloudflare real
+# (plan-finalizacion-mvp.md Gate 3.2). Verificado: una respuesta completa con
+# ese tamaño de evidencia tomó ~14-30s cuando salió bien.
+llm_timeout_s = 60
 
 # Solo desarrollo: reutiliza respuestas anteriores en vez de llamar al proveedor.
 # Nunca activar en producción.
