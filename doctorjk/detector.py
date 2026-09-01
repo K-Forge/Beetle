@@ -47,7 +47,7 @@ class Transition:
 
 
 @dataclass
-class _EstadoClave:
+class _KeyState:
     """Contador y estado por clave. Mutable e interno: `Detector` es dueño
     de esta estructura, ningún otro módulo la lee ni la escribe."""
 
@@ -75,16 +75,16 @@ class Detector:
     def __init__(self, persistence_cycles: Mapping[SignalType, int], cooldown_cycles: int) -> None:
         if not persistence_cycles:
             raise ValueError("persistence_cycles no puede estar vacío")
-        for tipo, ciclos in persistence_cycles.items():
-            if ciclos <= 0:
+        for signal_type, cycles in persistence_cycles.items():
+            if cycles <= 0:
                 raise ValueError(
-                    f"persistence_cycles[{tipo.value}] debe ser mayor que 0, se recibió {ciclos!r}"
+                    f"persistence_cycles[{signal_type.value}] debe ser mayor que 0, se recibió {cycles!r}"
                 )
         if cooldown_cycles <= 0:
             raise ValueError("cooldown_cycles debe ser mayor que 0")
         self._persistence_cycles = dict(persistence_cycles)
         self._cooldown_cycles = cooldown_cycles
-        self._claves: dict[str, _EstadoClave] = {}
+        self._keys: dict[str, _KeyState] = {}
 
     def _persistence_for(self, signal_type: SignalType) -> int:
         try:
@@ -100,23 +100,23 @@ class Detector:
         cambiaron de estado (una clave ausente este ciclo no se toca: ni
         avanza ni se reinicia su contador, porque no es una lectura sana ni
         cruzada, es una falla de adquisición -- monitor.py ya la excluyó)."""
-        transiciones: list[Transition] = []
+        transitions: list[Transition] = []
         for signal in signals:
-            estado_clave = self._claves.setdefault(signal.key, _EstadoClave())
-            transicion = self._evaluar_una(signal, estado_clave, now)
-            if transicion is not None:
-                transiciones.append(transicion)
-        return tuple(transiciones)
+            key_state = self._keys.setdefault(signal.key, _KeyState())
+            transition = self._evaluate_one(signal, key_state, now)
+            if transition is not None:
+                transitions.append(transition)
+        return tuple(transitions)
 
-    def _evaluar_una(
-        self, signal: Signal, estado_clave: _EstadoClave, now: datetime
+    def _evaluate_one(
+        self, signal: Signal, key_state: _KeyState, now: datetime
     ) -> Transition | None:
-        if estado_clave.state in (IncidentState.NORMAL, IncidentState.RESOLVED):
-            transicion = self._desde_normal_o_resuelto(signal, estado_clave, now)
-        elif estado_clave.state is IncidentState.CANDIDATE:
-            transicion = self._desde_candidato(signal, estado_clave, now)
+        if key_state.state in (IncidentState.NORMAL, IncidentState.RESOLVED):
+            transition = self._from_normal_or_resolved(signal, key_state, now)
+        elif key_state.state is IncidentState.CANDIDATE:
+            transition = self._from_candidate(signal, key_state, now)
         else:
-            transicion = self._desde_incidente(signal, estado_clave, now)
+            transition = self._from_incident(signal, key_state, now)
 
         # Registro de decisión por ciclo (#178): señal, contador y estado
         # resultante, sin evidencia extensa ni valores sensibles.
@@ -125,41 +125,41 @@ class Detector:
             signal.key,
             signal.signal_type.value,
             signal.crossed,
-            estado_clave.consecutive_count,
-            estado_clave.state.value,
+            key_state.consecutive_count,
+            key_state.state.value,
         )
-        if transicion is not None:
+        if transition is not None:
             logger.info(
                 "clave=%s %s -> %s: %s",
                 signal.key,
-                transicion.previous_state.value,
-                transicion.new_state.value,
-                transicion.reason,
+                transition.previous_state.value,
+                transition.new_state.value,
+                transition.reason,
             )
-        return transicion
+        return transition
 
-    def _desde_normal_o_resuelto(
-        self, signal: Signal, estado_clave: _EstadoClave, now: datetime
+    def _from_normal_or_resolved(
+        self, signal: Signal, key_state: _KeyState, now: datetime
     ) -> Transition | None:
         if not signal.crossed:
-            if estado_clave.state is not IncidentState.RESOLVED:
+            if key_state.state is not IncidentState.RESOLVED:
                 return None  # normal y sana: nada que hacer
 
             # En enfriamiento: un ciclo sano más hacia "normal".
-            estado_clave.consecutive_count += 1
-            if estado_clave.consecutive_count < self._cooldown_cycles:
+            key_state.consecutive_count += 1
+            if key_state.consecutive_count < self._cooldown_cycles:
                 return None
 
-            anterior = estado_clave.state
-            estado_clave.state = IncidentState.NORMAL
-            estado_clave.consecutive_count = 0
-            estado_clave.incident_id = None
-            estado_clave.started_at = None
-            estado_clave.confirmed_at = None
+            previous = key_state.state
+            key_state.state = IncidentState.NORMAL
+            key_state.consecutive_count = 0
+            key_state.incident_id = None
+            key_state.started_at = None
+            key_state.confirmed_at = None
             return Transition(
                 key=signal.key,
                 signal_type=signal.signal_type,
-                previous_state=anterior,
+                previous_state=previous,
                 new_state=IncidentState.NORMAL,
                 reason=(
                     f"se mantuvo sana {self._cooldown_cycles} ciclos tras resolverse, "
@@ -175,29 +175,29 @@ class Detector:
         # configurados -- fail fast, no esperar al segundo ciclo para
         # descubrir que falta el mapeo (CONTEXTO-IA.md §8.1).
         self._persistence_for(signal.signal_type)
-        anterior = estado_clave.state
-        estado_clave.state = IncidentState.CANDIDATE
-        estado_clave.consecutive_count = 1
-        estado_clave.started_at = now
-        estado_clave.incident_id = None
-        estado_clave.confirmed_at = None
+        previous = key_state.state
+        key_state.state = IncidentState.CANDIDATE
+        key_state.consecutive_count = 1
+        key_state.started_at = now
+        key_state.incident_id = None
+        key_state.confirmed_at = None
         return Transition(
             key=signal.key,
             signal_type=signal.signal_type,
-            previous_state=anterior,
+            previous_state=previous,
             new_state=IncidentState.CANDIDATE,
             reason=f"cruzó el umbral (valor={signal.value}, umbral={signal.threshold})",
             incident=None,
         )
 
-    def _desde_candidato(
-        self, signal: Signal, estado_clave: _EstadoClave, now: datetime
+    def _from_candidate(
+        self, signal: Signal, key_state: _KeyState, now: datetime
     ) -> Transition | None:
         if not signal.crossed:
             # Pico temporal: no llegó a los N ciclos, se descarta sin dejar rastro.
-            estado_clave.state = IncidentState.NORMAL
-            estado_clave.consecutive_count = 0
-            estado_clave.started_at = None
+            key_state.state = IncidentState.NORMAL
+            key_state.consecutive_count = 0
+            key_state.started_at = None
             return Transition(
                 key=signal.key,
                 signal_type=signal.signal_type,
@@ -207,20 +207,20 @@ class Detector:
                 incident=None,
             )
 
-        ciclos_requeridos = self._persistence_for(signal.signal_type)
-        estado_clave.consecutive_count += 1
-        if estado_clave.consecutive_count < ciclos_requeridos:
+        required_cycles = self._persistence_for(signal.signal_type)
+        key_state.consecutive_count += 1
+        if key_state.consecutive_count < required_cycles:
             return None  # sigue siendo candidato, todavía no alcanza N
 
-        estado_clave.state = IncidentState.INCIDENT
-        estado_clave.consecutive_count = 0  # ahora cuenta ciclos sanos hacia la resolución
-        estado_clave.incident_id = uuid4().hex
-        estado_clave.confirmed_at = now
-        incidente = Incident(
-            incident_id=estado_clave.incident_id,
+        key_state.state = IncidentState.INCIDENT
+        key_state.consecutive_count = 0  # ahora cuenta ciclos sanos hacia la resolución
+        key_state.incident_id = uuid4().hex
+        key_state.confirmed_at = now
+        incident = Incident(
+            incident_id=key_state.incident_id,
             signal_type=signal.signal_type,
             resource_key=signal.key,
-            started_at=estado_clave.started_at or now,
+            started_at=key_state.started_at or now,
             confirmed_at=now,
             state=IncidentState.INCIDENT,
         )
@@ -229,32 +229,32 @@ class Detector:
             signal_type=signal.signal_type,
             previous_state=IncidentState.CANDIDATE,
             new_state=IncidentState.INCIDENT,
-            reason=f"persistió {ciclos_requeridos} ciclos consecutivos, se confirma incidente",
-            incident=incidente,
+            reason=f"persistió {required_cycles} ciclos consecutivos, se confirma incidente",
+            incident=incident,
         )
 
-    def _desde_incidente(
-        self, signal: Signal, estado_clave: _EstadoClave, now: datetime
+    def _from_incident(
+        self, signal: Signal, key_state: _KeyState, now: datetime
     ) -> Transition | None:
         if signal.crossed:
             # Sigue activo: se suprime el re-disparo (tarea #177). El
             # contador de sanidad, si había empezado, se reinicia.
-            estado_clave.consecutive_count = 0
+            key_state.consecutive_count = 0
             return None
 
-        ciclos_requeridos = self._persistence_for(signal.signal_type)
-        estado_clave.consecutive_count += 1
-        if estado_clave.consecutive_count < ciclos_requeridos:
+        required_cycles = self._persistence_for(signal.signal_type)
+        key_state.consecutive_count += 1
+        if key_state.consecutive_count < required_cycles:
             return None  # sano, pero todavía no alcanza N para resolver
 
-        estado_clave.state = IncidentState.RESOLVED
-        estado_clave.consecutive_count = 0  # ahora cuenta ciclos de enfriamiento
-        incidente_resuelto = Incident(
-            incident_id=estado_clave.incident_id or "",
+        key_state.state = IncidentState.RESOLVED
+        key_state.consecutive_count = 0  # ahora cuenta ciclos de enfriamiento
+        resolved_incident = Incident(
+            incident_id=key_state.incident_id or "",
             signal_type=signal.signal_type,
             resource_key=signal.key,
-            started_at=estado_clave.started_at or now,
-            confirmed_at=estado_clave.confirmed_at,
+            started_at=key_state.started_at or now,
+            confirmed_at=key_state.confirmed_at,
             state=IncidentState.RESOLVED,
         )
         return Transition(
@@ -262,6 +262,6 @@ class Detector:
             signal_type=signal.signal_type,
             previous_state=IncidentState.INCIDENT,
             new_state=IncidentState.RESOLVED,
-            reason=f"se normalizó durante {ciclos_requeridos} ciclos consecutivos, incidente resuelto",
-            incident=incidente_resuelto,
+            reason=f"se normalizó durante {required_cycles} ciclos consecutivos, incidente resuelto",
+            incident=resolved_incident,
         )
