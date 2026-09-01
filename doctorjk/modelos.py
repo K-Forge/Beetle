@@ -48,6 +48,29 @@ class LoadAverage:
 
 
 @dataclass(frozen=True)
+class ServiceState:
+    """Estado consultado explícitamente para un servicio de `servicios_vigilados`
+    (plan-finalizacion-mvp.md Gate 1.3, defecto 1). A diferencia de
+    `FailedService` -- que solo lista lo que ya está fallido -- este tipo
+    también trae los servicios sanos, porque sin ellos el detector no puede
+    distinguir "se recuperó" de "nunca se consultó"."""
+
+    name: str
+    active: bool
+
+
+@dataclass(frozen=True)
+class MonitoredPort:
+    """Puerto vigilado y el servicio que se espera que lo posea (tarea #175,
+    clave `puertos_vigilados`). El servicio esperado es lo que permite
+    distinguir `port_down` (nadie escucha) de `port_occupied` (alguien
+    escucha, pero no es el servicio dueño)."""
+
+    port: int
+    service: str
+
+
+@dataclass(frozen=True)
 class SystemSnapshot:
     """Una lectura del estado del servidor en un instante dado.
 
@@ -69,6 +92,13 @@ class SystemSnapshot:
     ports_available: bool
     load: LoadAverage | None
     load_available: bool
+    # Estado de los servicios explícitamente vigilados (config.py,
+    # `servicios_vigilados`), consultado aparte de `failed_services` porque
+    # `systemctl --failed` nunca informa de un servicio sano (defecto 1).
+    # Vacío y disponible=True cuando no hay nada vigilado: no es una falla de
+    # adquisición, es que no se pidió nada.
+    service_states: tuple[ServiceState, ...] = ()
+    service_states_available: bool = True
 
 
 class SignalType(str, Enum):
@@ -78,6 +108,15 @@ class SignalType(str, Enum):
     DISK_FULL = "disk_full"
     MEMORY_LOW = "memory_low"
     PORT_DOWN = "port_down"
+    # PORT_OCCUPIED no estaba en la tarea #173: se agrega en
+    # plan-finalizacion-mvp.md Gate 1.3 (defecto 6) porque port_down no puede
+    # representar "el puerto esperado está tomado por otro proceso mientras
+    # el servicio dueño no está activo" sin mentir sobre su semántica
+    # original. El nombre va en inglés (regla cero); el mapeo hacia
+    # `puerto_ocupado` en clasificador.py (Gate 4) documenta la
+    # inconsistencia histórica con la tarea #200, no la resuelve por
+    # renombrado silencioso.
+    PORT_OCCUPIED = "port_occupied"
     # HIGH_LOAD está declarado porque la tarea #173 ya fija el nombre, pero
     # normalize_snapshot() todavía no lo emite: plan-mvp.md bloque A4 deja la
     # carga como informativa hasta que exista un criterio de incidente

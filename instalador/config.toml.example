@@ -27,6 +27,19 @@ puerto_timeout_s = 60
 # Ciclos consecutivos con un servicio fallido antes de confirmar el incidente.
 servicio_ciclos = 2
 
+# Unidades systemd que el agente vigila explícitamente. Sin esta lista no hay
+# forma de distinguir "el servicio está sano" de "nunca se consultó": ajustar
+# a los servicios reales del cliente.
+servicios_vigilados = ["nginx.service", "postgresql.service"]
+
+# Puertos vigilados y el servicio que se espera que los tenga abiertos. Si el
+# puerto está ocupado por otro proceso mientras el servicio esperado no está
+# activo, se distingue de "nadie escucha" (port_down vs. port_occupied).
+puertos_vigilados = [
+  { puerto = 80, servicio = "nginx.service" },
+  { puerto = 5432, servicio = "postgresql.service" },
+]
+
 # Directorio donde quedan los informes .md y su evidencia cruda asociada.
 directorio_informes = "/var/lib/doctorjk/informes"
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 import pytest
 
 from doctorjk.config import AppConfig, ConfigError, RemediationMode, load_config
+from doctorjk.modelos import MonitoredPort
 
 TOML_VALIDO = """
 intervalo_monitor_s = 30
@@ -16,6 +17,11 @@ disco_pct = 90
 memoria_disponible_mb = 512
 puerto_timeout_s = 60
 servicio_ciclos = 2
+servicios_vigilados = ["nginx.service", "postgresql.service"]
+puertos_vigilados = [
+  { puerto = 80, servicio = "nginx.service" },
+  { puerto = 5432, servicio = "postgresql.service" },
+]
 directorio_informes = "/var/lib/doctorjk/informes"
 modo_remediacion = "diagnostico"
 auto_fix = false
@@ -45,6 +51,12 @@ def test_config_valida_produce_appconfig_tipado(tmp_path):
     assert config.memory_available_mb_threshold == 512
     assert config.port_timeout_s == 60
     assert config.service_cycles == 2
+    assert config.port_cycles == 2  # ceil(60 / 30)
+    assert config.monitored_services == ("nginx.service", "postgresql.service")
+    assert config.monitored_ports == (
+        MonitoredPort(port=80, service="nginx.service"),
+        MonitoredPort(port=5432, service="postgresql.service"),
+    )
     assert str(config.reports_dir) == "/var/lib/doctorjk/informes"
     assert config.remediation_mode is RemediationMode.DIAGNOSTICO
     assert config.auto_fix is False
@@ -132,3 +144,77 @@ def test_auto_fix_true_con_dry_run_false_es_valido(tmp_path):
     config = load_config(ruta)
     assert config.auto_fix is True
     assert config.dry_run is False
+
+
+# --------------------------------------------------- servicios_vigilados / puertos_vigilados
+
+
+def test_port_cycles_redondea_hacia_arriba(tmp_path):
+    # 60s de timeout sobre un intervalo de 30s exige exactamente 2 ciclos; un
+    # intervalo que no divide justo debe redondear hacia arriba, nunca hacia
+    # abajo (nunca confirmar con menos tiempo del pedido).
+    contenido = TOML_VALIDO.replace("intervalo_monitor_s = 30", "intervalo_monitor_s = 25")
+    ruta = _escribir(tmp_path, contenido)
+    config = load_config(ruta)
+    assert config.port_cycles == 3  # ceil(60 / 25) = 3
+
+
+def test_servicios_vigilados_vacio_falla(tmp_path):
+    contenido = TOML_VALIDO.replace(
+        'servicios_vigilados = ["nginx.service", "postgresql.service"]',
+        "servicios_vigilados = []",
+    )
+    ruta = _escribir(tmp_path, contenido)
+    with pytest.raises(ConfigError, match="servicios_vigilados"):
+        load_config(ruta)
+
+
+def test_servicios_vigilados_duplicado_falla(tmp_path):
+    contenido = TOML_VALIDO.replace(
+        'servicios_vigilados = ["nginx.service", "postgresql.service"]',
+        'servicios_vigilados = ["nginx.service", "nginx.service"]',
+    )
+    ruta = _escribir(tmp_path, contenido)
+    with pytest.raises(ConfigError, match="servicios_vigilados"):
+        load_config(ruta)
+
+
+@pytest.mark.parametrize("unidad", ["nginx service", "../nginx.service", "a/b.service", "$(rm)"])
+def test_servicios_vigilados_con_metacaracteres_falla(tmp_path, unidad):
+    contenido = TOML_VALIDO.replace(
+        'servicios_vigilados = ["nginx.service", "postgresql.service"]',
+        f'servicios_vigilados = ["{unidad}"]',
+    )
+    ruta = _escribir(tmp_path, contenido)
+    with pytest.raises(ConfigError, match="servicios_vigilados"):
+        load_config(ruta)
+
+
+def test_puertos_vigilados_fuera_de_rango_falla(tmp_path):
+    contenido = TOML_VALIDO.replace(
+        '{ puerto = 80, servicio = "nginx.service" },',
+        '{ puerto = 70000, servicio = "nginx.service" },',
+    )
+    ruta = _escribir(tmp_path, contenido)
+    with pytest.raises(ConfigError, match="puertos_vigilados"):
+        load_config(ruta)
+
+
+def test_puertos_vigilados_duplicado_falla(tmp_path):
+    contenido = TOML_VALIDO.replace(
+        '{ puerto = 5432, servicio = "postgresql.service" },',
+        '{ puerto = 80, servicio = "postgresql.service" },',
+    )
+    ruta = _escribir(tmp_path, contenido)
+    with pytest.raises(ConfigError, match="puertos_vigilados"):
+        load_config(ruta)
+
+
+def test_puertos_vigilados_sin_servicio_falla(tmp_path):
+    contenido = TOML_VALIDO.replace(
+        '{ puerto = 80, servicio = "nginx.service" },',
+        "{ puerto = 80 },",
+    )
+    ruta = _escribir(tmp_path, contenido)
+    with pytest.raises(ConfigError, match="puertos_vigilados"):
+        load_config(ruta)
