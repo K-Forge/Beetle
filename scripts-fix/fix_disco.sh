@@ -11,15 +11,24 @@
 # segura de distinguir un archivo temporal huérfano de uno en uso de otro
 # proceso o de otro equipo sin una política de retención más fina, que
 # queda pendiente para cuando el producto la defina (no se inventa acá).
+#
+# Solo actúa sobre "/": journal y /var/log viven en el filesystem raíz, así
+# que limpiarlos no ayuda a un punto de montaje distinto -- para cualquier
+# otro mount point este script escala en vez de fingir que hizo algo útil
+# (hallazgo de auditoría #9, 2026-09-01).
+#
+# $1 = punto de montaje. config.toml se lee de la ruta fija que define
+# comun.sh (no es un argumento; ver esa cabecera).
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=comun.sh
 source "$DIR/comun.sh"
 
 mount_point="${1:-}"
-[[ -n "$mount_point" ]] || fail "uso: $0 <punto-de-montaje>"
+[[ -n "$mount_point" ]] || fail "uso: $0 <punto-de-montaje> [config.toml]"
+[[ "$mount_point" == "/" ]] || fail "sin política de limpieza para $mount_point (solo se cubre /); escalar sin actuar"
 
-threshold="${DOCTORJK_DISK_THRESHOLD_PCT:-90}"
+threshold="$(read_config_attr disk_pct_threshold)"
 
 disk_usage_pct() {
   df --output=pcent "$mount_point" 2>/dev/null | tail -1 | tr -dc '0-9'

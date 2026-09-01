@@ -7,16 +7,20 @@
 # comando systemctl suelto. Solo actúa sobre una unidad que el cliente ya
 # vigila en config.toml (servicios_vigilados) -- nunca sobre un nombre de
 # unidad arbitrario recibido por argumento.
+#
+# $1 = unidad a corregir. config.toml se lee de la ruta fija que define
+# comun.sh (ver esa cabecera: no es un argumento, sudoers no restringe
+# argumentos y sería tan manipulable como una variable de entorno).
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=comun.sh
 source "$DIR/comun.sh"
 
 unit="${1:-}"
-[[ -n "$unit" ]] || fail "uso: $0 <unidad-systemd>"
+[[ -n "$unit" ]] || fail "uso: $0 <unidad-systemd> [config.toml]"
 
-list_contains "$unit" "${DOCTORJK_MONITORED_SERVICES:-}" \
-  || fail "unidad no vigilada, no se toca: $unit"
+monitored="$(read_config_attr monitored_services)"
+list_contains "$unit" "$monitored" || fail "unidad no vigilada, no se toca: $unit"
 
 log "precondición: $unit debe estar fallida"
 if systemctl is-active --quiet "$unit"; then
