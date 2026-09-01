@@ -2,10 +2,18 @@
 # Modo 2 -- corrige un incidente port_occupied: detiene la unidad que ocupa
 # indebidamente el puerto y reinicia la que se esperaba (tareas #199, #202).
 #
-# Solo actúa si la unidad que ocupa el puerto es una que el cliente ya
-# vigila explícitamente (servicios_vigilados) -- ante un PID cuya unidad no
-# se puede identificar, o que no está en esa lista, escala sin ejecutar
-# nada (plan-finalizacion-mvp.md §4.2: "identidad incierta, escalar").
+# Solo actúa si la unidad que ocupa el puerto está en ocupantes_puerto_aprobados
+# -- ante un PID cuya unidad no se puede identificar, o que no está en esa
+# lista, escala sin ejecutar nada (plan-finalizacion-mvp.md §4.2: "identidad
+# incierta, escalar").
+#
+# Deliberadamente NO se usa servicios_vigilados para esto (hallazgo de
+# auditoría P0, 2026-09-01): esa lista dice qué vigilar, no qué está
+# aprobado para detener. Si una unidad ocupante figurara en
+# servicios_vigilados, detenerla dispararía service_failed sobre ella
+# misma y fix_servicio.sh la reiniciaría -- pudiendo recrear
+# port_occupied en bucle. ocupantes_puerto_aprobados es una allowlist
+# separada, explícita, y vacía por defecto.
 #
 # Postcondición real (hallazgo de auditoría #3, 2026-09-01): que la unidad
 # esperada esté "active" no prueba que haya vuelto a enlazar el puerto --
@@ -63,9 +71,9 @@ if [[ -n "$pid" ]]; then
     exit 0
   fi
 
-  monitored="$(read_config_attr monitored_services)"
-  list_contains "$occupier_unit" "$monitored" \
-    || fail "unidad $occupier_unit no está vigilada; identidad no confiable, escalar sin actuar"
+  approved="$(read_config_attr approved_port_occupants)"
+  list_contains "$occupier_unit" "$approved" \
+    || fail "unidad $occupier_unit no está en ocupantes_puerto_aprobados; no autorizada para detener, escalar sin actuar"
 
   log "precondición: $occupier_unit ocupa el puerto $port en vez de $expected_unit"
   run_or_announce systemctl stop "$occupier_unit"

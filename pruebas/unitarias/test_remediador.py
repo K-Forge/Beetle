@@ -30,6 +30,7 @@ def _config(tmp_path: Path, **overrides) -> AppConfig:
         monitored_services=("postgresql.service",),
         monitored_ports=(),
         approved_memory_unit="",
+        approved_port_occupants=(),
         reports_dir=tmp_path,
         remediation_mode=RemediationMode.SCRIPTS,
         auto_fix=True,
@@ -120,6 +121,7 @@ servicio_ciclos = 2
 servicios_vigilados = ["nginx.service"]
 puertos_vigilados = [{ puerto = 80, servicio = "nginx.service" }]
 unidad_memoria_aprobada = ""
+ocupantes_puerto_aprobados = []
 directorio_informes = "{reports_dir}"
 modo_remediacion = "scripts"
 auto_fix = false

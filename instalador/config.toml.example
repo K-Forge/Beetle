@@ -47,6 +47,16 @@ puertos_vigilados = [
 # seguro de interrumpir con un restart.
 unidad_memoria_aprobada = ""
 
+# Unidades que el Modo 2 puede DETENER cuando ocupan indebidamente un
+# puerto vigilado (script fix_puerto.sh). Lista vacía por defecto: sin
+# nada aprobado explícitamente, el script escala en vez de detener
+# cualquier cosa. Deliberadamente separada de servicios_vigilados: esa
+# lista solo dice qué vigilar, no qué está aprobado para detener -- si se
+# reusara, detener una unidad que también está en servicios_vigilados
+# dispararía service_failed sobre ella misma y fix_servicio.sh la
+# reiniciaría, pudiendo recrear el mismo incidente en bucle.
+ocupantes_puerto_aprobados = []
+
 # Directorio donde quedan los informes .md y su evidencia cruda asociada.
 directorio_informes = "/var/lib/doctorjk/informes"
 

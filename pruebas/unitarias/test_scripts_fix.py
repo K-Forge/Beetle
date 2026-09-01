@@ -36,6 +36,7 @@ read_config_attr() {
     dry_run) echo "${TEST_DRY_RUN:-0}" ;;
     monitored_services) echo "${TEST_MONITORED_SERVICES:-}" ;;
     monitored_ports) echo "${TEST_MONITORED_PORTS:-}" ;;
+    approved_port_occupants) echo "${TEST_APPROVED_PORT_OCCUPANTS:-}" ;;
     disk_pct_threshold) echo "${TEST_DISK_THRESHOLD:-90}" ;;
     memory_available_mb_threshold) echo "${TEST_MEMORY_THRESHOLD:-512}" ;;
     approved_memory_unit) echo "${TEST_APPROVED_MEMORY_UNIT:-}" ;;
@@ -120,7 +121,6 @@ def test_fix_puerto_reinicia_y_verifica_aunque_nadie_escuche_al_empezar(tmp_path
         "TEST_PORT": "5432",
         "TEST_EXPECTED_UNIT": "postgresql@16-main.service",
         "TEST_MONITORED_PORTS": "5432=postgresql@16-main.service",
-        "TEST_MONITORED_SERVICES": "postgresql@16-main.service",
         "TEST_DRY_RUN": "0",
     }
 
@@ -160,7 +160,6 @@ def test_fix_puerto_en_dry_run_solo_anuncia_aunque_nadie_escuche(tmp_path: Path)
         "TEST_PORT": "5432",
         "TEST_EXPECTED_UNIT": "postgresql@16-main.service",
         "TEST_MONITORED_PORTS": "5432=postgresql@16-main.service",
-        "TEST_MONITORED_SERVICES": "postgresql@16-main.service",
         "TEST_DRY_RUN": "1",
     }
 
@@ -177,6 +176,138 @@ def test_fix_puerto_en_dry_run_solo_anuncia_aunque_nadie_escuche(tmp_path: Path)
     assert not (fake_state / "systemctl_calls").exists() or "restart" not in (
         fake_state / "systemctl_calls"
     ).read_text(encoding="utf-8")
+
+
+# ss ya muestra un ocupante indebido en la primera llamada (precondición);
+# desde la segunda, muestra a la unidad esperada con OTRO pid (postcondición,
+# simulando que systemctl restart de verdad hizo bind del puerto).
+_FAKE_SS_OCUPADO = """#!/usr/bin/env bash
+count_file="$FAKE_STATE_DIR/ss_calls"
+count=0
+[[ -f "$count_file" ]] && count="$(cat "$count_file")"
+count=$((count + 1))
+echo "$count" > "$count_file"
+echo "State  Recv-Q Send-Q  Local Address:Port  Peer Address:Port Process"
+if (( count == 1 )); then
+  echo "LISTEN 0 128 0.0.0.0:${TEST_PORT} 0.0.0.0:* users:((\\"proc\\",pid=4242,fd=3))"
+else
+  echo "LISTEN 0 128 0.0.0.0:${TEST_PORT} 0.0.0.0:* users:((\\"proc\\",pid=5555,fd=3))"
+fi
+"""
+
+# unit_for_pid() distingue por el pid que le pasan: 4242 -> ocupante, otro
+# pid -> unidad esperada -- así el test puede distinguir a quién identificó
+# el script en cada llamada, no solo asumir un único nombre fijo.
+_FAKE_SYSTEMCTL_PUERTO_OCUPADO = """#!/usr/bin/env bash
+echo "$*" >> "$FAKE_STATE_DIR/systemctl_calls"
+case "$1" in
+  status)
+    if [[ "$2" == "4242" ]]; then
+      echo "\xe2\x97\x8f ${TEST_OCCUPIER_UNIT} - fake unit"
+    else
+      echo "\xe2\x97\x8f ${TEST_EXPECTED_UNIT} - fake unit"
+    fi
+    exit 0
+    ;;
+  is-active) exit 0 ;;
+  restart|stop) exit 0 ;;
+  *) exit 0 ;;
+esac
+"""
+
+
+def test_fix_puerto_falla_cerrado_si_ocupante_vigilado_pero_no_aprobado(tmp_path: Path):
+    # Hallazgo de auditoría P0 (2026-09-01): fix_puerto.sh NO debe autorizar
+    # a detener un ocupante solo porque está en servicios_vigilados -- esa
+    # lista dice qué vigilar, no qué está aprobado para detener. Estar
+    # vigilado pero NO en ocupantes_puerto_aprobados debe fallar cerrado.
+    scripts_dir = tmp_path / "scripts-fix"
+    scripts_dir.mkdir()
+    _instalar(scripts_dir / "comun.sh", _FAKE_COMUN_SH)
+    _instalar(scripts_dir / "fix_puerto.sh", FIX_PUERTO.read_text(encoding="utf-8"))
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    _instalar(fake_bin / "ss", _FAKE_SS_OCUPADO)
+    _instalar(fake_bin / "systemctl", _FAKE_SYSTEMCTL_PUERTO_OCUPADO)
+    _instalar(fake_bin / "sleep", _FAKE_SLEEP)
+
+    fake_state = tmp_path / "estado"
+    fake_state.mkdir()
+
+    entorno = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_STATE_DIR": str(fake_state),
+        "TEST_PORT": "18080",
+        "TEST_EXPECTED_UNIT": "doctorjk-test-owner.service",
+        "TEST_OCCUPIER_UNIT": "doctorjk-test-occupier.service",
+        "TEST_MONITORED_PORTS": "18080=doctorjk-test-owner.service",
+        "TEST_MONITORED_SERVICES": "doctorjk-test-occupier.service",  # vigilado...
+        "TEST_APPROVED_PORT_OCCUPANTS": "",  # ...pero NO aprobado para detener
+        "TEST_DRY_RUN": "0",
+    }
+
+    resultado = subprocess.run(
+        [str(scripts_dir / "fix_puerto.sh"), "18080"],
+        capture_output=True,
+        text=True,
+        env=entorno,
+        timeout=10,
+    )
+
+    assert resultado.returncode != 0
+    assert "no está en ocupantes_puerto_aprobados" in resultado.stderr
+    assert not (fake_state / "systemctl_calls").exists() or (
+        "stop" not in (fake_state / "systemctl_calls").read_text(encoding="utf-8")
+        and "restart" not in (fake_state / "systemctl_calls").read_text(encoding="utf-8")
+    )
+
+
+def test_fix_puerto_detiene_ocupante_aprobado_aunque_no_este_vigilado(tmp_path: Path):
+    # La otra mitad del mismo hallazgo: estar en ocupantes_puerto_aprobados
+    # alcanza para autorizar, sin necesidad de estar también en
+    # servicios_vigilados -- las dos listas son independientes.
+    scripts_dir = tmp_path / "scripts-fix"
+    scripts_dir.mkdir()
+    _instalar(scripts_dir / "comun.sh", _FAKE_COMUN_SH)
+    _instalar(scripts_dir / "fix_puerto.sh", FIX_PUERTO.read_text(encoding="utf-8"))
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    _instalar(fake_bin / "ss", _FAKE_SS_OCUPADO)
+    _instalar(fake_bin / "systemctl", _FAKE_SYSTEMCTL_PUERTO_OCUPADO)
+    _instalar(fake_bin / "sleep", _FAKE_SLEEP)
+
+    fake_state = tmp_path / "estado"
+    fake_state.mkdir()
+
+    entorno = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_STATE_DIR": str(fake_state),
+        "TEST_PORT": "18080",
+        "TEST_EXPECTED_UNIT": "doctorjk-test-owner.service",
+        "TEST_OCCUPIER_UNIT": "doctorjk-test-occupier.service",
+        "TEST_MONITORED_PORTS": "18080=doctorjk-test-owner.service",
+        "TEST_MONITORED_SERVICES": "",  # NO vigilado...
+        "TEST_APPROVED_PORT_OCCUPANTS": "doctorjk-test-occupier.service",  # ...pero sí aprobado
+        "TEST_DRY_RUN": "0",
+    }
+
+    resultado = subprocess.run(
+        [str(scripts_dir / "fix_puerto.sh"), "18080"],
+        capture_output=True,
+        text=True,
+        env=entorno,
+        timeout=10,
+    )
+
+    llamadas = (fake_state / "systemctl_calls").read_text(encoding="utf-8")
+    assert resultado.returncode == 0, resultado.stdout + resultado.stderr
+    assert "stop doctorjk-test-occupier.service" in llamadas
+    assert "restart doctorjk-test-owner.service" in llamadas
+    assert "verificado con ss" in resultado.stdout
 
 
 # --------------------------------------------------------------- fix_disco.sh

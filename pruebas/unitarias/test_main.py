@@ -58,6 +58,7 @@ servicio_ciclos = 2
 servicios_vigilados = ["postgresql.service"]
 puertos_vigilados = [{ puerto = 5432, servicio = "postgresql.service" }]
 unidad_memoria_aprobada = ""
+ocupantes_puerto_aprobados = []
 directorio_informes = "{reports_dir}"
 modo_remediacion = "diagnostico"
 auto_fix = false
@@ -295,6 +296,7 @@ def _config_de_prueba(tmp_path, **overrides):
         monitored_services=("postgresql.service",),
         monitored_ports=(),
         approved_memory_unit="",
+        approved_port_occupants=(),
         reports_dir=tmp_path,
         remediation_mode=RemediationMode.DIAGNOSTIC,
         auto_fix=False,

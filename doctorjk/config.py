@@ -67,6 +67,16 @@ class AppConfig:
     # una unidad aprobada identificable, escalar; no matar procesos
     # arbitrarios ni escribir a drop_caches").
     approved_memory_unit: str
+    # Unidades que fix_puerto.sh (Modo 2, Gate 4) puede detener cuando
+    # ocupan indebidamente un puerto vigilado. Deliberadamente separada de
+    # `monitored_services`: esa lista solo dice qué vigilar, no qué está
+    # aprobado para detener (hallazgo de auditoría P0, 2026-09-01). Si
+    # fix_puerto.sh reusara monitored_services como autorización, detener
+    # una unidad que también está ahí dispararía service_failed sobre ella
+    # misma; fix_servicio.sh la reiniciaría, pudiendo recrear
+    # port_occupied en bucle. Tupla vacía por defecto: sin nada aprobado
+    # explícitamente, el script escala en vez de detener cualquier cosa.
+    approved_port_occupants: tuple[str, ...]
     reports_dir: Path
     remediation_mode: RemediationMode
     auto_fix: bool
@@ -208,6 +218,32 @@ def _approved_memory_unit(key_name: str) -> _Validator:
     return validate
 
 
+def _approved_port_occupants_list(key_name: str) -> _Validator:
+    def validate(value: object) -> object:
+        # A diferencia de servicios_vigilados, lista vacía es el default
+        # seguro (nada aprobado para detener), no un error -- por eso no
+        # reusa _monitored_services_list, que exige no-vacío.
+        if not isinstance(value, list):
+            raise ConfigError(
+                f"'{key_name}' debe ser una lista de unidades systemd, se recibió {value!r}"
+            )
+        seen: set[str] = set()
+        units: list[str] = []
+        for unit in value:
+            if not _is_valid_unit(unit):
+                raise ConfigError(
+                    f"'{key_name}' contiene una unidad inválida: {unit!r} "
+                    "(sin espacios, '/', '..' ni metacaracteres)"
+                )
+            if unit in seen:
+                raise ConfigError(f"'{key_name}' tiene la unidad duplicada: {unit!r}")
+            seen.add(unit)
+            units.append(unit)
+        return tuple(units)
+
+    return validate
+
+
 def _monitored_ports_list(key_name: str) -> _Validator:
     def validate(value: object) -> object:
         if not isinstance(value, list) or not value:
@@ -278,6 +314,10 @@ _SCHEMA: dict[str, tuple[str, _Validator]] = {
     "unidad_memoria_aprobada": (
         "approved_memory_unit",
         _approved_memory_unit("unidad_memoria_aprobada"),
+    ),
+    "ocupantes_puerto_aprobados": (
+        "approved_port_occupants",
+        _approved_port_occupants_list("ocupantes_puerto_aprobados"),
     ),
     "directorio_informes": ("reports_dir", _absolute_directory("directorio_informes")),
     "modo_remediacion": ("remediation_mode", _remediation_mode("modo_remediacion")),
@@ -358,6 +398,7 @@ def load_config(path: Path) -> AppConfig:
         monitored_services=values["monitored_services"],
         monitored_ports=values["monitored_ports"],
         approved_memory_unit=values["approved_memory_unit"],
+        approved_port_occupants=values["approved_port_occupants"],
         reports_dir=values["reports_dir"],
         remediation_mode=values["remediation_mode"],
         auto_fix=values["auto_fix"],

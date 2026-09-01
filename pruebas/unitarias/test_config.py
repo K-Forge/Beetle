@@ -23,6 +23,7 @@ puertos_vigilados = [
   { puerto = 5432, servicio = "postgresql.service" },
 ]
 unidad_memoria_aprobada = ""
+ocupantes_puerto_aprobados = []
 directorio_informes = "/var/lib/doctorjk/informes"
 modo_remediacion = "diagnostico"
 auto_fix = false
@@ -59,6 +60,7 @@ def test_config_valida_produce_appconfig_tipado(tmp_path):
         MonitoredPort(port=5432, service="postgresql.service"),
     )
     assert config.approved_memory_unit == ""
+    assert config.approved_port_occupants == ()
     assert str(config.reports_dir) == "/var/lib/doctorjk/informes"
     assert config.remediation_mode is RemediationMode.DIAGNOSTIC
     assert config.auto_fix is False
@@ -242,3 +244,70 @@ def test_puertos_vigilados_sin_servicio_falla(tmp_path):
     ruta = _escribir(tmp_path, contenido)
     with pytest.raises(ConfigError, match="puertos_vigilados"):
         load_config(ruta)
+
+
+# ------------------------------------------------------- ocupantes_puerto_aprobados
+
+
+def test_ocupantes_puerto_aprobados_vacio_es_valido(tmp_path):
+    # Default seguro: sin nada aprobado, fix_puerto.sh escala en vez de
+    # detener cualquier cosa (a diferencia de servicios_vigilados, acá una
+    # lista vacía NO es un error).
+    ruta = _escribir(tmp_path, TOML_VALIDO)
+    assert load_config(ruta).approved_port_occupants == ()
+
+
+def test_ocupantes_puerto_aprobados_con_nombres_validos(tmp_path):
+    contenido = TOML_VALIDO.replace(
+        "ocupantes_puerto_aprobados = []",
+        'ocupantes_puerto_aprobados = ["appcarga.service", "doctorjk-test-occupier.service"]',
+    )
+    ruta = _escribir(tmp_path, contenido)
+    assert load_config(ruta).approved_port_occupants == (
+        "appcarga.service",
+        "doctorjk-test-occupier.service",
+    )
+
+
+def test_ocupantes_puerto_aprobados_duplicado_falla(tmp_path):
+    contenido = TOML_VALIDO.replace(
+        "ocupantes_puerto_aprobados = []",
+        'ocupantes_puerto_aprobados = ["appcarga.service", "appcarga.service"]',
+    )
+    ruta = _escribir(tmp_path, contenido)
+    with pytest.raises(ConfigError, match="ocupantes_puerto_aprobados"):
+        load_config(ruta)
+
+
+@pytest.mark.parametrize("unidad", ["nginx service", "../nginx.service", "a/b.service", "$(rm)"])
+def test_ocupantes_puerto_aprobados_con_metacaracteres_falla(tmp_path, unidad):
+    contenido = TOML_VALIDO.replace(
+        "ocupantes_puerto_aprobados = []",
+        f'ocupantes_puerto_aprobados = ["{unidad}"]',
+    )
+    ruta = _escribir(tmp_path, contenido)
+    with pytest.raises(ConfigError, match="ocupantes_puerto_aprobados"):
+        load_config(ruta)
+
+
+def test_ocupantes_puerto_aprobados_no_es_lista_falla(tmp_path):
+    contenido = TOML_VALIDO.replace(
+        "ocupantes_puerto_aprobados = []",
+        'ocupantes_puerto_aprobados = "appcarga.service"',
+    )
+    ruta = _escribir(tmp_path, contenido)
+    with pytest.raises(ConfigError, match="ocupantes_puerto_aprobados"):
+        load_config(ruta)
+
+
+def test_ocupantes_puerto_aprobados_independiente_de_servicios_vigilados(tmp_path):
+    # El punto del hallazgo P0: una unidad puede estar en una lista sin
+    # estar en la otra. Acá está aprobada para detenerse pero NO vigilada.
+    contenido = TOML_VALIDO.replace(
+        "ocupantes_puerto_aprobados = []",
+        'ocupantes_puerto_aprobados = ["doctorjk-test-occupier.service"]',
+    )
+    ruta = _escribir(tmp_path, contenido)
+    config = load_config(ruta)
+    assert "doctorjk-test-occupier.service" in config.approved_port_occupants
+    assert "doctorjk-test-occupier.service" not in config.monitored_services
