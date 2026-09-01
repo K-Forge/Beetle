@@ -1267,3 +1267,75 @@ el VPS real** -- el próximo Paso 0 es la primera vez que se ejercitan ahí,
 ahora con cobertura de regresión local que los habría atrapado a ambos.
 Retomar desde B2 (ninguno de los 4 dry-runs directos llegó a completarse)
 con Fase A repetida desde cero.
+
+### 9.6 P0 de interacción entre señales, encontrado en revisión local antes del tercer intento
+
+**Hallazgo:** `normalize_snapshot()` (`doctorjk/monitor.py`) emitía
+`SERVICE_FAILED` para TODOS los `service_states`, sin importar el motivo de
+la inactividad, y por separado `PORT_OCCUPIED` cuando el dueño esperado de
+un puerto vigilado está `inactive` y otro proceso escucha ahí. Cuando las
+dos condiciones coinciden en el mismo servicio -- el dueño cayó Y otro
+proceso ya le tomó el puerto -- ambas señales cruzan en el mismo snapshot,
+y con `servicio_ciclos`/`puerto_timeout_s` iguales (como en la Fase A de
+este protocolo) ambos incidentes se confirman en el mismo ciclo. El
+remediador dispararía `fix_servicio.sh` (reinicia al dueño) mientras el
+puerto sigue tomado por el otro proceso -- el bind vuelve a fallar, falla o
+ruido sin necesidad -- antes de que `fix_puerto.sh` llegara a liberar el
+puerto.
+
+**Corrección -- priorizar la señal específica:** se precalcula, antes del
+bloque de servicios, qué servicios monitoreados están indebidamente
+ocupados en su puerto vigilado en ESE snapshot puntual (mismo criterio que
+`PORT_OCCUPIED`, calculado una sola vez y reutilizado en ambos bloques para
+no duplicar lógica). `SERVICE_FAILED` se omite -- no se emite, ni sana ni
+cruzada -- para esos servicios en ese snapshot: `PORT_OCCUPIED` ya es el
+diagnóstico correcto y tiene su propio script (`fix_puerto.sh`).
+
+**Por qué se omite en vez de forzar `crossed=False`:** `detector.py`
+documenta explícitamente que una clave ausente en un ciclo "no se toca: ni
+avanza ni se reinicia su contador" (`Detector.evaluate()`). Omitir es la
+opción conservadora: no arriesga confirmar `SERVICE_FAILED` de más
+(avanzando un contador que no debería avanzar) ni resolverlo de más
+(un `crossed=False` forzado empujaría un `INCIDENT` ya confirmado hacia
+`RESOLVED` sin que el servicio realmente esté sano, solo enmascarado por el
+puerto ocupado). El estado de esa clave queda congelado mientras dura la
+ocupación indebida, y se retoma normal en cuanto deja de estar
+indebidamente ocupada.
+
+**Por qué NO se suprime cuando nadie escucha (`PORT_DOWN`, no
+`PORT_OCCUPIED`):** `PORT_DOWN` no tiene script de Modo 2 -- queda
+`NOT_MAPPED` (`remediador.py::_skip()`) -- así que `fix_servicio.sh` sigue
+siendo la única corrección automática posible para ese caso.
+`SERVICE_FAILED` se conserva sin excepción cuando el puerto está caído,
+libre o no vigilado.
+
+**Trade-off documentado:** la supresión es específica al servicio, no un
+apagado general de `SERVICE_FAILED` en el snapshot -- un servicio ajeno al
+puerto ocupado (o incluso otro servicio vigilado, sin relación) sigue
+emitiendo su propia señal sin tocar. Si más adelante `servicio_ciclos` y
+`puerto_timeout_s` llegaran a tener persistencias muy distintas, la
+ventana en la que una señal está confirmada y la otra todavía no podría
+crecer -- no cambia la corrección (sigue siendo correcto priorizar
+`PORT_OCCUPIED`), pero sí el tiempo que un cliente ve el incidente
+diagnosticado antes de que el modo automático lo tome.
+
+**Pruebas nuevas** (`pruebas/unitarias/test_normalizacion.py`): dueño
+inactivo + otro proceso escuchando → solo `PORT_OCCUPIED` cruza, sin
+`SERVICE_FAILED` para el dueño; dueño inactivo + nadie escucha → se
+conservan `SERVICE_FAILED` y `PORT_DOWN`; un servicio ajeno al puerto
+ocupado (`cron.service`, sin puerto vigilado propio) no se suprime aunque
+otro servicio sí lo esté; recuperación del dueño → `SERVICE_FAILED` vuelve
+a emitirse sano, lo que el detector necesita para poder resolver cualquier
+candidato/incidente que hubiera quedado abierto sobre esa clave. Confirmado
+por reversión que los dos primeros casos fallan contra el código viejo
+(los otros dos no dependen del fix, sirven de cobertura de completitud, no
+de regresión). Corregido de paso un test existente en `test_main.py`
+(`test_dos_recursos_mantienen_estado_independiente`) que, sin saberlo,
+modelaba exactamente este mismo escenario de interacción y esperaba 2
+informes donde ahora corresponde 1 -- reescrito con dos servicios
+genuinamente independientes (sin relación de puerto entre ellos), que es
+lo que el test siempre quiso probar. Suite completa: 319/319 (antes 315).
+
+**No probado en el VPS real todavía** -- se suma a los dos fixes de
+`comun.sh` de §9.5 como parte de lo que el próximo Paso 0 ejercita por
+primera vez ahí.
