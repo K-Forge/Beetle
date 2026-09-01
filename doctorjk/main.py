@@ -134,7 +134,7 @@ def log_snapshot(snapshot: SystemSnapshot) -> None:
     """Callback de solo-registro de Gate A, conservado para --once sin
     configuración y como referencia de qué trae un SystemSnapshot. El
     callback real que usa build_app() está en build_incident_pipeline()."""
-    memoria_disponible = (
+    available_memory = (
         f"{snapshot.memory.available_mb} MB" if snapshot.memory else "desconocida"
     )
     logger.info(
@@ -142,7 +142,7 @@ def log_snapshot(snapshot: SystemSnapshot) -> None:
         "memoria disponible=%s",
         len(snapshot.failed_services),
         len(snapshot.disks),
-        memoria_disponible,
+        available_memory,
     )
 
 
@@ -170,11 +170,11 @@ def queue_pending_incident(
     crecer sin límite (protocolo del plan, punto 4: "limitar la cola para no
     agotar memoria")."""
     if len(queue) >= MAX_PENDING_INCIDENTS:
-        descartado = queue.pop(0)
+        discarded = queue.pop(0)
         logger.warning(
             "cola de incidentes pendientes llena (%d); se descarta sin evidencia: %s",
             MAX_PENDING_INCIDENTS,
-            descartado.incident.incident_id,
+            discarded.incident.incident_id,
         )
     queue.append(PendingIncident(incident=incident, collect_after=collect_after))
 
@@ -185,11 +185,11 @@ def pop_due_incidents(queue: list[PendingIncident], now: datetime) -> list[Pendi
     para el próximo ciclo. Si el reloj saltó hacia adelante (reinicio del
     servicio, ajuste de hora), igual se procesan con lo que journalctl tenga
     disponible en ese momento -- no se inventa el minuto faltante."""
-    debidos = [pendiente for pendiente in queue if pendiente.collect_after <= now]
-    for pendiente in debidos:
-        queue.remove(pendiente)
-    debidos.sort(key=lambda pendiente: pendiente.collect_after)
-    return debidos
+    due = [pending for pending in queue if pending.collect_after <= now]
+    for pending in due:
+        queue.remove(pending)
+    due.sort(key=lambda pending: pending.collect_after)
+    return due
 
 
 def seconds_until_next_event(queue: list[PendingIncident], interval_s: float, now: datetime) -> float:
@@ -198,9 +198,9 @@ def seconds_until_next_event(queue: list[PendingIncident], interval_s: float, no
     antes. Nunca negativo: un incidente ya vencido despierta de inmediato."""
     if not queue:
         return interval_s
-    proximo_vencimiento = min(pendiente.collect_after for pendiente in queue)
-    restante = (proximo_vencimiento - now).total_seconds()
-    return max(0.0, min(interval_s, restante))
+    next_deadline = min(pending.collect_after for pending in queue)
+    remaining = (next_deadline - now).total_seconds()
+    return max(0.0, min(interval_s, remaining))
 
 
 def build_pipeline_deps(config: AppConfig, session: object) -> PipelineDeps:
@@ -220,16 +220,16 @@ def build_pipeline_deps(config: AppConfig, session: object) -> PipelineDeps:
     )
 
     return PipelineDeps(
-        collect_evidence=lambda incident, directorio, ahora: recolector.collect_evidence(
+        collect_evidence=lambda incident, directory, now: recolector.collect_evidence(
             incident,
-            reports_dir=directorio,
-            now=ahora,
+            reports_dir=directory,
+            now=now,
             command_timeout_s=config.command_timeout_s,
         ),
         write_raw_evidence=recolector.write_raw_evidence,
         sanitize_evidence=sanitizador.sanitize_evidence,
-        diagnose=lambda sanitizada, prompt: llm.diagnose(
-            sanitizada, prompt, llm_config, session
+        diagnose=lambda sanitized, prompt: llm.diagnose(
+            sanitized, prompt, llm_config, session
         ),
         save_report=informe.save_and_rotate,
     )
@@ -272,7 +272,7 @@ def _monitored_service_names(config: AppConfig) -> frozenset[str]:
     query_service_states() para que normalize_snapshot() pueda emitir
     service_failed y port_occupied correctamente."""
     return frozenset(config.monitored_services) | frozenset(
-        puerto.service for puerto in config.monitored_ports
+        port.service for port in config.monitored_ports
     )
 
 
@@ -300,47 +300,47 @@ def build_incident_pipeline(
     es tiempo real transcurrido, no un campo del snapshot. Inyectable para
     poder probar la cola sin depender de time.sleep() de verdad.
     """
-    interval_efectivo = interval_s if interval_s is not None else config.monitor_interval_s
+    effective_interval = interval_s if interval_s is not None else config.monitor_interval_s
     detector = Detector(
         persistence_cycles=_persistence_cycles_by_type(config),
         cooldown_cycles=config.cooldown_cycles,
     )
     deps = build_pipeline_deps(config, session)
-    pendientes: list[PendingIncident] = []
+    pending: list[PendingIncident] = []
 
-    def procesar_snapshot(snapshot: SystemSnapshot) -> None:
-        señales = monitor.normalize_snapshot(
+    def process_snapshot(snapshot: SystemSnapshot) -> None:
+        signals = monitor.normalize_snapshot(
             snapshot,
             disk_pct_threshold=config.disk_pct_threshold,
             memory_available_mb_threshold=config.memory_available_mb_threshold,
             monitored_ports=config.monitored_ports,
         )
-        for transicion in detector.evaluate(señales, snapshot.captured_at):
-            if transicion.new_state is IncidentState.INCIDENT and transicion.incident is not None:
-                vence = snapshot.captured_at + recolector.WINDOW_AFTER
-                queue_pending_incident(pendientes, transicion.incident, vence)
+        for transition in detector.evaluate(signals, snapshot.captured_at):
+            if transition.new_state is IncidentState.INCIDENT and transition.incident is not None:
+                due_at = snapshot.captured_at + recolector.WINDOW_AFTER
+                queue_pending_incident(pending, transition.incident, due_at)
                 logger.info(
                     "incidente confirmado, evidencia programada para %s: clave=%s",
-                    vence.isoformat(),
-                    transicion.key,
+                    due_at.isoformat(),
+                    transition.key,
                 )
-            elif transicion.new_state is IncidentState.RESOLVED:
+            elif transition.new_state is IncidentState.RESOLVED:
                 # Resolución: se registra, no se vuelve a invocar al LLM. El
                 # informe del incidente original ya cubrió el diagnóstico.
                 logger.info(
                     "incidente resuelto sin diagnóstico adicional: clave=%s tipo=%s",
-                    transicion.key,
-                    transicion.signal_type.value,
+                    transition.key,
+                    transition.signal_type.value,
                 )
 
-        ahora = now_fn()
-        for pendiente in pop_due_incidents(pendientes, ahora):
-            on_incident(pendiente.incident, prompt, config.reports_dir, deps, ahora)
+        now = now_fn()
+        for pending_incident in pop_due_incidents(pending, now):
+            on_incident(pending_incident.incident, prompt, config.reports_dir, deps, now)
 
-    def proxima_espera(now: datetime) -> float:
-        return seconds_until_next_event(pendientes, interval_efectivo, now)
+    def next_wait(now: datetime) -> float:
+        return seconds_until_next_event(pending, effective_interval, now)
 
-    return procesar_snapshot, proxima_espera
+    return process_snapshot, next_wait
 
 
 def build_app(args: argparse.Namespace) -> AppContext:
@@ -365,7 +365,7 @@ def build_app(args: argparse.Namespace) -> AppContext:
     interval_s = args.interval if args.interval is not None else config.monitor_interval_s
 
     session = requests.Session()
-    on_snapshot, proxima_espera = build_incident_pipeline(
+    on_snapshot, next_wait = build_incident_pipeline(
         config, prompt, session, interval_s=interval_s
     )
     monitored_service_names = _monitored_service_names(config)
@@ -378,7 +378,7 @@ def build_app(args: argparse.Namespace) -> AppContext:
             timeout_s=config.command_timeout_s, monitored_services=monitored_service_names
         ),
         on_snapshot=on_snapshot,
-        next_wakeup_delay=proxima_espera,
+        next_wakeup_delay=next_wait,
         close=session.close,
     )
 
@@ -433,8 +433,8 @@ def wait_for_next_cycle(fifo_fd: int | None, interval_s: float) -> str:
     selector = selectors.DefaultSelector()
     selector.register(fifo_fd, selectors.EVENT_READ)
     try:
-        eventos = selector.select(timeout=interval_s)
-        if not eventos:
+        events = selector.select(timeout=interval_s)
+        if not events:
             return "tick"
         try:
             os.read(fifo_fd, 4096)  # drena la señal; el contenido no importa
@@ -460,24 +460,24 @@ def run(context: AppContext) -> None:
     if ensure_fifo(context.fifo_path):
         fifo_fd = open_fifo_nonblocking(context.fifo_path)
 
-    detener = threading.Event()
+    stop = threading.Event()
 
-    def manejar_sigterm(signum: int, frame: object) -> None:
+    def handle_sigterm(signum: int, frame: object) -> None:
         logger.info("SIGTERM recibido, cerrando de forma ordenada")
-        detener.set()
+        stop.set()
 
-    signal.signal(signal.SIGTERM, manejar_sigterm)
+    signal.signal(signal.SIGTERM, handle_sigterm)
 
     try:
-        while not detener.is_set():
+        while not stop.is_set():
             # Gate 2.2: la espera no es siempre context.interval_s -- se
             # acorta si hay un incidente pendiente cuya ventana +1 minuto
             # vence antes del próximo tick de polling.
-            espera_s = context.next_wakeup_delay(datetime.now(timezone.utc))
-            motivo = wait_for_next_cycle(fifo_fd, espera_s)
-            if detener.is_set():
+            wait_s = context.next_wakeup_delay(datetime.now(timezone.utc))
+            reason = wait_for_next_cycle(fifo_fd, wait_s)
+            if stop.is_set():
                 break
-            logger.debug("ciclo disparado por: %s (espera=%.1fs)", motivo, espera_s)
+            logger.debug("ciclo disparado por: %s (espera=%.1fs)", reason, wait_s)
             context.on_snapshot(context.take_snapshot())
     finally:
         if fifo_fd is not None:
