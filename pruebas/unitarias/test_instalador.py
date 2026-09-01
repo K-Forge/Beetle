@@ -85,3 +85,25 @@ def test_install_sh_chequea_nonewprivileges_de_la_unidad_instalada():
     # para detectar también un despliegue con una unidad vieja o distinta.
     assert "NoNewPrivileges" in INSTALL_SH
     assert re.search(r"grep\s+-qE?\s+.*NoNewPrivileges", INSTALL_SH)
+
+
+def test_install_sh_reafirma_permisos_de_config_toml_en_cada_corrida():
+    # Hallazgo de auditoría (2026-09-01): si config.toml ya existe (una
+    # reinstalación), el bloque original lo dejaba intacto sin más --
+    # incluidos dueño/permisos. comun.sh ahora falla cerrado si config.toml
+    # no es exactamente root:doctorjk 0640 (defensa #1-bis); sin esta
+    # reafirmación, unos permisos que quedaron mal en algún momento romperían
+    # Modo 2 en silencio hasta que alguien lo notara a mano.
+    #
+    # Se busca fuera del bloque if/else de creación, igual que ya se hace
+    # para .env, para confirmar que corre SIEMPRE, no solo en la rama "recién
+    # creado".
+    match = re.search(
+        r'if \[\[ -f "\$CONFIG_DIR/config\.toml" \]\]; then.*?\nfi\n(.*?)\n\n',
+        INSTALL_SH,
+        re.DOTALL,
+    )
+    assert match is not None, "no encontré el bloque de config.toml en install.sh"
+    despues_del_bloque = match.group(1)
+    assert re.search(r'chown\s+root:"?\$SERVICE_USER"?\s+"\$CONFIG_DIR/config\.toml"', despues_del_bloque)
+    assert re.search(r'chmod\s+0640\s+"\$CONFIG_DIR/config\.toml"', despues_del_bloque)
