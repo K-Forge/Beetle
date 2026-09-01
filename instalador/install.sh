@@ -165,6 +165,19 @@ rm -f "$SUDOERS_TMP"
 trap - EXIT
 info "sudoers instalado: 4 scripts exactos, sin shell genérico"
 
+# Verificación de autorización, NUNCA de ejecución (corregido 2026-09-01
+# tras hallazgo de auditoría: la versión anterior corría fix_disco.sh de
+# verdad, lo que podía disparar una limpieza real de journal/logs en cada
+# reinstalación si el disco ya estaba sobre el umbral y dry_run=false --
+# un instalador jamás debe provocar una remediación como efecto secundario
+# de instalarse). "sudo -n -l <comando>" solo confirma que sudoers lo
+# autorizaría, sin correrlo.
+if runuser -u "$SERVICE_USER" -- sudo -n -l "$PREFIX/scripts-fix/fix_disco.sh" / >/dev/null 2>&1; then
+  info "verificado: sudoers autoriza a $SERVICE_USER a escalar a los scripts de Modo 2"
+else
+  fatal "sudoers no autoriza a $SERVICE_USER para Modo 2; revisar /etc/sudoers.d/doctorjk"
+fi
+
 # --------------------------------------------------------------- 6. servicios
 
 step "Instalando unidades de systemd"
@@ -173,6 +186,15 @@ for unit in "${UNITS[@]}"; do
   install -m 0644 "$REPO/instalador/$unit" "/etc/systemd/system/$unit"
   info "$unit instalada"
 done
+
+# Chequeo estático de la unidad instalada (bloqueante P0 de auditoría,
+# 2026-09-01): NoNewPrivileges=true anularía sudo desde dentro del servicio
+# aunque el sudoers esté perfecto -- se verifica el archivo ya copiado a
+# /etc/systemd/system, no la fuente del repo, para detectar tambien un
+# despliegue con una unidad vieja/distinta.
+if grep -qE '^\s*NoNewPrivileges\s*=\s*true' "/etc/systemd/system/doctorjk.service"; then
+  fatal "doctorjk.service tiene NoNewPrivileges=true; sudo -n nunca escalaría, Modo 2 fallaría siempre"
+fi
 
 systemctl daemon-reload
 for unit in "${UNITS[@]}"; do
@@ -196,24 +218,47 @@ if (( ${#failed_units[@]} > 0 )); then
 fi
 
 # ----------------------------------------------------------------- 7. resumen
+# Refleja el estado REAL de config.toml/.env, no un texto fijo (hallazgo de
+# auditoría #8): en una reinstalación con Modo 2 ya activo o la credencial
+# ya puesta, el resumen anterior mentía en las dos líneas.
 
 MODE=$(grep -E '^\s*modo_remediacion' "$CONFIG_DIR/config.toml" | head -1 | cut -d'"' -f2 || echo "desconocido")
+case "$MODE" in
+  diagnostico) MODE_DESC="solo diagnostica; no modifica el servidor" ;;
+  scripts)     MODE_DESC="Modo 2 activo; corrige con scripts deterministas si auto_fix=true" ;;
+  automatico)  MODE_DESC="Modo 3 activo; el modelo genera el plan si auto_fix=true" ;;
+  *)           MODE_DESC="modo desconocido, revisar config.toml" ;;
+esac
+
+if grep -qE '^\s*DOCTORJK_LLM_API_KEY\s*=\s*\S' "$CONFIG_DIR/.env"; then
+  CRED_ESTADO="configurada"
+else
+  CRED_ESTADO="falta completarla"
+fi
 
 cat <<END
 
 == Instalacion completa
 
-  Modo actual:   $MODE (solo diagnostica; no modifica el servidor)
+  Modo actual:   $MODE ($MODE_DESC)
   Configuracion: $CONFIG_DIR/config.toml
-  Credencial:    $CONFIG_DIR/.env      <- falta completarla
+  Credencial:    $CONFIG_DIR/.env      <- $CRED_ESTADO
   Informes:      $REPORTS_DIR
   Servicios:     ${UNITS[*]}
 
+END
+
+if [[ "$CRED_ESTADO" == "falta completarla" ]]; then
+  cat <<END
   Antes de que pueda diagnosticar, pon la credencial del proveedor:
 
       sudo nano $CONFIG_DIR/.env
       sudo systemctl restart doctorjk.service
 
+END
+fi
+
+cat <<END
   Para ver que esta haciendo:
 
       journalctl -u doctorjk -f
