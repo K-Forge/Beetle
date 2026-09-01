@@ -119,6 +119,24 @@ def test_deepseek_solo_cambia_configuracion(evidencia):
 
 # ------------------------------------------------------------------ no reintentables
 
+def test_token_ausente_cae_al_fallback_sin_quedar_en_silencio(evidencia):
+    # config.llm_api_key queda "" cuando falta la variable de entorno
+    # (config.py); el proveedor real la rechaza con 401 -- este test cubre
+    # ese camino completo desde una credencial vacía, no solo el 401 aislado.
+    sin_token = LLMConfig(
+        base_url="https://api.cloudflare.com/v1/chat/completions",
+        model="gpt-oss-120b",
+        api_key="",
+    )
+    sesion = SesionFalsa(RespuestaFalsa(401))
+    _, dormir = _esperas()
+
+    resultado = diagnose(evidencia, "prompt", sin_token, sesion, sleep=dormir)
+
+    assert resultado.from_fallback is True
+    assert "Bearer " == sesion.llamadas[0]["headers"]["Authorization"]
+
+
 @pytest.mark.parametrize("estado", [401, 403])
 def test_credencial_invalida_no_reintenta_y_cae_al_fallback(evidencia, config, estado):
     # Defecto 11: una credencial mala no debe dejar al agente sin informe --
