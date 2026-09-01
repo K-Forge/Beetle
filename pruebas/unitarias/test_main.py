@@ -293,7 +293,7 @@ def _config_de_prueba(tmp_path, **overrides):
         monitored_services=("postgresql.service",),
         monitored_ports=(),
         reports_dir=tmp_path,
-        remediation_mode=RemediationMode.DIAGNOSTICO,
+        remediation_mode=RemediationMode.DIAGNOSTIC,
         auto_fix=False,
         dry_run=True,
         command_timeout_s=5.0,

@@ -58,7 +58,7 @@ def test_config_valida_produce_appconfig_tipado(tmp_path):
         MonitoredPort(port=5432, service="postgresql.service"),
     )
     assert str(config.reports_dir) == "/var/lib/doctorjk/informes"
-    assert config.remediation_mode is RemediationMode.DIAGNOSTICO
+    assert config.remediation_mode is RemediationMode.DIAGNOSTIC
     assert config.auto_fix is False
     assert config.dry_run is True
     assert config.command_timeout_s == 30

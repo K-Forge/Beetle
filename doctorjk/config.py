@@ -25,9 +25,9 @@ from doctorjk.modelos import MonitoredPort
 class RemediationMode(str, Enum):
     """Valores permitidos de `modo_remediacion` (plan-mvp.md §3.3)."""
 
-    DIAGNOSTICO = "diagnostico"
+    DIAGNOSTIC = "diagnostico"
     SCRIPTS = "scripts"
-    AUTOMATICO = "automatico"
+    AUTOMATIC = "automatico"
 
 
 class ConfigError(ValueError):
@@ -75,197 +75,197 @@ class AppConfig:
     llm_api_key: str = ""
 
 
-_Validador = Callable[[object], object]
+_Validator = Callable[[object], object]
 
 
-def _numero_positivo(nombre_clave: str, tipos: tuple[type, ...]) -> _Validador:
-    def validar(valor: object) -> object:
-        if isinstance(valor, bool) or not isinstance(valor, tipos):
-            raise ConfigError(f"'{nombre_clave}' debe ser numérico, se recibió {valor!r}")
-        if valor <= 0:
-            raise ConfigError(f"'{nombre_clave}' debe ser mayor que 0, se recibió {valor!r}")
-        return valor
+def _positive_number(key_name: str, types: tuple[type, ...]) -> _Validator:
+    def validate(value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, types):
+            raise ConfigError(f"'{key_name}' debe ser numérico, se recibió {value!r}")
+        if value <= 0:
+            raise ConfigError(f"'{key_name}' debe ser mayor que 0, se recibió {value!r}")
+        return value
 
-    return validar
-
-
-def _porcentaje(nombre_clave: str) -> _Validador:
-    def validar(valor: object) -> object:
-        if isinstance(valor, bool) or not isinstance(valor, int):
-            raise ConfigError(f"'{nombre_clave}' debe ser un entero, se recibió {valor!r}")
-        if not (0 < valor <= 100):
-            raise ConfigError(f"'{nombre_clave}' debe estar entre 1 y 100, se recibió {valor!r}")
-        return valor
-
-    return validar
+    return validate
 
 
-def _booleano(nombre_clave: str) -> _Validador:
-    def validar(valor: object) -> object:
-        if not isinstance(valor, bool):
-            raise ConfigError(f"'{nombre_clave}' debe ser booleano, se recibió {valor!r}")
-        return valor
+def _percentage(key_name: str) -> _Validator:
+    def validate(value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ConfigError(f"'{key_name}' debe ser un entero, se recibió {value!r}")
+        if not (0 < value <= 100):
+            raise ConfigError(f"'{key_name}' debe estar entre 1 y 100, se recibió {value!r}")
+        return value
 
-    return validar
+    return validate
 
 
-def _directorio_absoluto(nombre_clave: str) -> _Validador:
-    def validar(valor: object) -> object:
-        if not isinstance(valor, str) or not valor.strip():
+def _boolean(key_name: str) -> _Validator:
+    def validate(value: object) -> object:
+        if not isinstance(value, bool):
+            raise ConfigError(f"'{key_name}' debe ser booleano, se recibió {value!r}")
+        return value
+
+    return validate
+
+
+def _absolute_directory(key_name: str) -> _Validator:
+    def validate(value: object) -> object:
+        if not isinstance(value, str) or not value.strip():
             raise ConfigError(
-                f"'{nombre_clave}' debe ser una ruta no vacía, se recibió {valor!r}"
+                f"'{key_name}' debe ser una ruta no vacía, se recibió {value!r}"
             )
-        ruta = Path(valor)
-        if not ruta.is_absolute():
+        resolved_path = Path(value)
+        if not resolved_path.is_absolute():
             raise ConfigError(
-                f"'{nombre_clave}' debe ser una ruta absoluta, se recibió {valor!r}"
+                f"'{key_name}' debe ser una ruta absoluta, se recibió {value!r}"
             )
-        return ruta
+        return resolved_path
 
-    return validar
+    return validate
 
 
-def _modo_remediacion(nombre_clave: str) -> _Validador:
-    def validar(valor: object) -> object:
-        if not isinstance(valor, str):
-            raise ConfigError(f"'{nombre_clave}' debe ser texto, se recibió {valor!r}")
+def _remediation_mode(key_name: str) -> _Validator:
+    def validate(value: object) -> object:
+        if not isinstance(value, str):
+            raise ConfigError(f"'{key_name}' debe ser texto, se recibió {value!r}")
         try:
-            return RemediationMode(valor)
+            return RemediationMode(value)
         except ValueError:
-            opciones = ", ".join(modo.value for modo in RemediationMode)
+            options = ", ".join(mode.value for mode in RemediationMode)
             raise ConfigError(
-                f"'{nombre_clave}' debe ser uno de: {opciones}; se recibió {valor!r}"
+                f"'{key_name}' debe ser uno de: {options}; se recibió {value!r}"
             ) from None
 
-    return validar
+    return validate
 
 
 # Clave del TOML -> (atributo en AppConfig, validador). Cualquier clave del
 # archivo que no esté acá se rechaza como desconocida; cualquier clave de acá
 # ausente del archivo se rechaza como faltante. Ninguna clave tiene default
 # implícito: una instalación nueva copia config.toml.example completo.
-def _texto_no_vacio(nombre_clave: str) -> _Validador:
-    def validar(valor: object) -> object:
-        if not isinstance(valor, str) or not valor.strip():
-            raise ConfigError(f"'{nombre_clave}' debe ser un texto no vacío, se recibió {valor!r}")
-        return valor.strip()
+def _non_empty_text(key_name: str) -> _Validator:
+    def validate(value: object) -> object:
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigError(f"'{key_name}' debe ser un texto no vacío, se recibió {value!r}")
+        return value.strip()
 
-    return validar
+    return validate
 
 
 # Nombre de unidad systemd: sin espacios, '/', '..' ni otros metacaracteres
 # (plan-finalizacion-mvp.md Gate 1.2). El conjunto permitido ya excluye '/' y
 # '..' por construcción, no hace falta una regla aparte para ellos.
-_PATRON_UNIDAD_SYSTEMD = re.compile(r"^[A-Za-z0-9@_.\-]+$")
+_SYSTEMD_UNIT_PATTERN = re.compile(r"^[A-Za-z0-9@_.\-]+$")
 
 
-def _es_unidad_valida(valor: object) -> bool:
-    return isinstance(valor, str) and bool(valor) and _PATRON_UNIDAD_SYSTEMD.fullmatch(valor) is not None
+def _is_valid_unit(value: object) -> bool:
+    return isinstance(value, str) and bool(value) and _SYSTEMD_UNIT_PATTERN.fullmatch(value) is not None
 
 
-def _lista_servicios_vigilados(nombre_clave: str) -> _Validador:
-    def validar(valor: object) -> object:
-        if not isinstance(valor, list) or not valor:
+def _monitored_services_list(key_name: str) -> _Validator:
+    def validate(value: object) -> object:
+        if not isinstance(value, list) or not value:
             raise ConfigError(
-                f"'{nombre_clave}' debe ser una lista no vacía de unidades systemd, "
-                f"se recibió {valor!r}"
+                f"'{key_name}' debe ser una lista no vacía de unidades systemd, "
+                f"se recibió {value!r}"
             )
-        vistos: set[str] = set()
-        servicios: list[str] = []
-        for unidad in valor:
-            if not _es_unidad_valida(unidad):
+        seen: set[str] = set()
+        services: list[str] = []
+        for unit in value:
+            if not _is_valid_unit(unit):
                 raise ConfigError(
-                    f"'{nombre_clave}' contiene una unidad inválida: {unidad!r} "
+                    f"'{key_name}' contiene una unidad inválida: {unit!r} "
                     "(sin espacios, '/', '..' ni metacaracteres)"
                 )
-            if unidad in vistos:
-                raise ConfigError(f"'{nombre_clave}' tiene la unidad duplicada: {unidad!r}")
-            vistos.add(unidad)
-            servicios.append(unidad)
-        return tuple(servicios)
+            if unit in seen:
+                raise ConfigError(f"'{key_name}' tiene la unidad duplicada: {unit!r}")
+            seen.add(unit)
+            services.append(unit)
+        return tuple(services)
 
-    return validar
+    return validate
 
 
-def _lista_puertos_vigilados(nombre_clave: str) -> _Validador:
-    def validar(valor: object) -> object:
-        if not isinstance(valor, list) or not valor:
+def _monitored_ports_list(key_name: str) -> _Validator:
+    def validate(value: object) -> object:
+        if not isinstance(value, list) or not value:
             raise ConfigError(
-                f"'{nombre_clave}' debe ser una lista no vacía de tablas "
-                f"{{puerto, servicio}}, se recibió {valor!r}"
+                f"'{key_name}' debe ser una lista no vacía de tablas "
+                f"{{puerto, servicio}}, se recibió {value!r}"
             )
-        vistos: set[int] = set()
-        puertos: list[MonitoredPort] = []
-        for entrada in valor:
-            if not isinstance(entrada, dict):
+        seen: set[int] = set()
+        ports: list[MonitoredPort] = []
+        for entry in value:
+            if not isinstance(entry, dict):
                 raise ConfigError(
-                    f"'{nombre_clave}' debe contener tablas {{puerto, servicio}}, "
-                    f"se recibió {entrada!r}"
+                    f"'{key_name}' debe contener tablas {{puerto, servicio}}, "
+                    f"se recibió {entry!r}"
                 )
-            puerto = entrada.get("puerto")
-            servicio = entrada.get("servicio")
-            if isinstance(puerto, bool) or not isinstance(puerto, int) or not (1 <= puerto <= 65535):
+            port = entry.get("puerto")
+            service = entry.get("servicio")
+            if isinstance(port, bool) or not isinstance(port, int) or not (1 <= port <= 65535):
                 raise ConfigError(
-                    f"'{nombre_clave}': 'puerto' debe ser un entero entre 1 y 65535, "
-                    f"se recibió {puerto!r}"
+                    f"'{key_name}': 'puerto' debe ser un entero entre 1 y 65535, "
+                    f"se recibió {port!r}"
                 )
-            if not _es_unidad_valida(servicio):
+            if not _is_valid_unit(service):
                 raise ConfigError(
-                    f"'{nombre_clave}': 'servicio' inválido para el puerto {puerto}: {servicio!r} "
+                    f"'{key_name}': 'servicio' inválido para el puerto {port}: {service!r} "
                     "(sin espacios, '/', '..' ni metacaracteres)"
                 )
-            if puerto in vistos:
-                raise ConfigError(f"'{nombre_clave}' tiene el puerto duplicado: {puerto}")
-            vistos.add(puerto)
-            puertos.append(MonitoredPort(port=puerto, service=servicio))
-        return tuple(puertos)
+            if port in seen:
+                raise ConfigError(f"'{key_name}' tiene el puerto duplicado: {port}")
+            seen.add(port)
+            ports.append(MonitoredPort(port=port, service=service))
+        return tuple(ports)
 
-    return validar
+    return validate
 
 
-_ESQUEMA: dict[str, tuple[str, _Validador]] = {
+_SCHEMA: dict[str, tuple[str, _Validator]] = {
     "intervalo_monitor_s": (
         "monitor_interval_s",
-        _numero_positivo("intervalo_monitor_s", (int, float)),
+        _positive_number("intervalo_monitor_s", (int, float)),
     ),
     "ciclos_persistencia": (
         "persistence_cycles",
-        _numero_positivo("ciclos_persistencia", (int,)),
+        _positive_number("ciclos_persistencia", (int,)),
     ),
     "enfriamiento_ciclos": (
         "cooldown_cycles",
-        _numero_positivo("enfriamiento_ciclos", (int,)),
+        _positive_number("enfriamiento_ciclos", (int,)),
     ),
-    "disco_pct": ("disk_pct_threshold", _porcentaje("disco_pct")),
+    "disco_pct": ("disk_pct_threshold", _percentage("disco_pct")),
     "memoria_disponible_mb": (
         "memory_available_mb_threshold",
-        _numero_positivo("memoria_disponible_mb", (int,)),
+        _positive_number("memoria_disponible_mb", (int,)),
     ),
     "puerto_timeout_s": (
         "port_timeout_s",
-        _numero_positivo("puerto_timeout_s", (int, float)),
+        _positive_number("puerto_timeout_s", (int, float)),
     ),
-    "servicio_ciclos": ("service_cycles", _numero_positivo("servicio_ciclos", (int,))),
+    "servicio_ciclos": ("service_cycles", _positive_number("servicio_ciclos", (int,))),
     "servicios_vigilados": (
         "monitored_services",
-        _lista_servicios_vigilados("servicios_vigilados"),
+        _monitored_services_list("servicios_vigilados"),
     ),
     "puertos_vigilados": (
         "monitored_ports",
-        _lista_puertos_vigilados("puertos_vigilados"),
+        _monitored_ports_list("puertos_vigilados"),
     ),
-    "directorio_informes": ("reports_dir", _directorio_absoluto("directorio_informes")),
-    "modo_remediacion": ("remediation_mode", _modo_remediacion("modo_remediacion")),
-    "auto_fix": ("auto_fix", _booleano("auto_fix")),
-    "dry_run": ("dry_run", _booleano("dry_run")),
+    "directorio_informes": ("reports_dir", _absolute_directory("directorio_informes")),
+    "modo_remediacion": ("remediation_mode", _remediation_mode("modo_remediacion")),
+    "auto_fix": ("auto_fix", _boolean("auto_fix")),
+    "dry_run": ("dry_run", _boolean("dry_run")),
     "timeout_comando_s": (
         "command_timeout_s",
-        _numero_positivo("timeout_comando_s", (int, float)),
+        _positive_number("timeout_comando_s", (int, float)),
     ),
-    "llm_url": ("llm_url", _texto_no_vacio("llm_url")),
-    "llm_modelo": ("llm_model", _texto_no_vacio("llm_modelo")),
-    "llm_timeout_s": ("llm_timeout_s", _numero_positivo("llm_timeout_s", (int, float))),
-    "llm_cache": ("llm_cache", _booleano("llm_cache")),
+    "llm_url": ("llm_url", _non_empty_text("llm_url")),
+    "llm_modelo": ("llm_model", _non_empty_text("llm_modelo")),
+    "llm_timeout_s": ("llm_timeout_s", _positive_number("llm_timeout_s", (int, float))),
+    "llm_cache": ("llm_cache", _boolean("llm_cache")),
 }
 
 # Variable de entorno que trae la credencial del proveedor. Se lee aparte del
@@ -280,37 +280,37 @@ def load_config(path: Path) -> AppConfig:
     valor de tipo/rango inválido.
     """
     try:
-        contenido_crudo = path.read_bytes()
+        raw_content = path.read_bytes()
     except OSError as error:
         raise ConfigError(f"no se pudo leer {path}: {error}") from error
 
     try:
-        datos = tomllib.loads(contenido_crudo.decode("utf-8"))
+        data = tomllib.loads(raw_content.decode("utf-8"))
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
         raise ConfigError(f"{path} no es TOML válido: {error}") from error
 
-    claves_desconocidas = set(datos) - set(_ESQUEMA)
-    if claves_desconocidas:
+    unknown_keys = set(data) - set(_SCHEMA)
+    if unknown_keys:
         raise ConfigError(
-            f"clave(s) desconocida(s) en {path}: {', '.join(sorted(claves_desconocidas))}"
+            f"clave(s) desconocida(s) en {path}: {', '.join(sorted(unknown_keys))}"
         )
 
-    claves_faltantes = set(_ESQUEMA) - set(datos)
-    if claves_faltantes:
+    missing_keys = set(_SCHEMA) - set(data)
+    if missing_keys:
         raise ConfigError(
-            f"falta(n) clave(s) obligatoria(s) en {path}: {', '.join(sorted(claves_faltantes))}"
+            f"falta(n) clave(s) obligatoria(s) en {path}: {', '.join(sorted(missing_keys))}"
         )
 
-    valores: dict[str, object] = {}
-    for clave_toml, (atributo, validar) in _ESQUEMA.items():
-        valores[atributo] = validar(datos[clave_toml])
+    values: dict[str, object] = {}
+    for toml_key, (attribute, validate) in _SCHEMA.items():
+        values[attribute] = validate(data[toml_key])
 
     # auto_fix ejecuta correcciones de verdad; dry_run las simula sin tocar el
     # servidor. Que ambas sean true a la vez es la misma incompatibilidad que
     # main.py ya rechaza entre --auto-fix y --dry-run (tarea #210).
-    valores["llm_api_key"] = os.environ.get(LLM_API_KEY_ENV, "")
+    values["llm_api_key"] = os.environ.get(LLM_API_KEY_ENV, "")
 
-    if valores["auto_fix"] and valores["dry_run"]:
+    if values["auto_fix"] and values["dry_run"]:
         raise ConfigError(
             f"{path}: 'auto_fix' y 'dry_run' no pueden ser true a la vez — uno ejecuta "
             "correcciones, el otro las simula sin tocar el servidor"
@@ -319,27 +319,27 @@ def load_config(path: Path) -> AppConfig:
     # port_timeout_s es un tiempo, no un número de ciclos; el detector solo
     # entiende ciclos. Redondeando hacia arriba, un puerto nunca se confirma
     # con menos tiempo del que pidió el cliente en config.toml.
-    ciclos_puerto = math.ceil(valores["port_timeout_s"] / valores["monitor_interval_s"])
+    computed_port_cycles = math.ceil(values["port_timeout_s"] / values["monitor_interval_s"])
 
     return AppConfig(
-        monitor_interval_s=valores["monitor_interval_s"],
-        persistence_cycles=valores["persistence_cycles"],
-        cooldown_cycles=valores["cooldown_cycles"],
-        disk_pct_threshold=valores["disk_pct_threshold"],
-        memory_available_mb_threshold=valores["memory_available_mb_threshold"],
-        port_timeout_s=valores["port_timeout_s"],
-        service_cycles=valores["service_cycles"],
-        port_cycles=max(ciclos_puerto, 1),
-        monitored_services=valores["monitored_services"],
-        monitored_ports=valores["monitored_ports"],
-        reports_dir=valores["reports_dir"],
-        remediation_mode=valores["remediation_mode"],
-        auto_fix=valores["auto_fix"],
-        dry_run=valores["dry_run"],
-        command_timeout_s=valores["command_timeout_s"],
-        llm_url=valores["llm_url"],
-        llm_model=valores["llm_model"],
-        llm_timeout_s=valores["llm_timeout_s"],
-        llm_cache=valores["llm_cache"],
-        llm_api_key=valores["llm_api_key"],
+        monitor_interval_s=values["monitor_interval_s"],
+        persistence_cycles=values["persistence_cycles"],
+        cooldown_cycles=values["cooldown_cycles"],
+        disk_pct_threshold=values["disk_pct_threshold"],
+        memory_available_mb_threshold=values["memory_available_mb_threshold"],
+        port_timeout_s=values["port_timeout_s"],
+        service_cycles=values["service_cycles"],
+        port_cycles=max(computed_port_cycles, 1),
+        monitored_services=values["monitored_services"],
+        monitored_ports=values["monitored_ports"],
+        reports_dir=values["reports_dir"],
+        remediation_mode=values["remediation_mode"],
+        auto_fix=values["auto_fix"],
+        dry_run=values["dry_run"],
+        command_timeout_s=values["command_timeout_s"],
+        llm_url=values["llm_url"],
+        llm_model=values["llm_model"],
+        llm_timeout_s=values["llm_timeout_s"],
+        llm_cache=values["llm_cache"],
+        llm_api_key=values["llm_api_key"],
     )
