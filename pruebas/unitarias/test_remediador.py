@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from doctorjk.config import AppConfig, RemediationMode
+from doctorjk.config import AppConfig, RemediationMode, load_config
 from doctorjk.modelos import Incident, IncidentState, RemediationOutcome, SignalType
 from doctorjk.remediador import remediate
 
@@ -73,10 +73,89 @@ def test_sin_modo_scripts_no_ejecuta_nada(tmp_path):
     assert resultado.script is None
 
 
-def test_sin_auto_fix_no_ejecuta_nada(tmp_path):
-    config = _config(tmp_path, auto_fix=False, dry_run=True)
+def test_sin_auto_fix_ni_dry_run_no_ejecuta_nada(tmp_path):
+    # Ni el opt-in de ejecución real (auto_fix) ni el de simulación
+    # (dry_run) están activos: no hay ninguna razón para correr el script.
+    config = _config(tmp_path, auto_fix=False, dry_run=False)
     resultado = remediate(_incidente(SignalType.DISK_FULL, "disk:/"), config, tmp_path)
     assert resultado.outcome is RemediationOutcome.NOT_ENABLED
+
+
+def test_dry_run_sin_auto_fix_si_ejecuta_en_simulacion(tmp_path):
+    # Revisión post-commit (2026-09-01): load_config() rechaza
+    # auto_fix=true junto con dry_run=true, así que exigir auto_fix acá
+    # habría hecho el dry-run de Modo 2 inalcanzable desde cualquier
+    # AppConfig válida -- nunca se podría simular sin antes habilitar la
+    # ejecución real. dry_run=true es su propio opt-in a *simular*.
+    _instalar_script(
+        tmp_path,
+        "fix_disco.sh",
+        "#!/usr/bin/env bash\necho '[DRY-RUN] simulando'\nexit 0\n",
+    )
+    config = _config(tmp_path, auto_fix=False, dry_run=True)
+    resultado = remediate(_incidente(SignalType.DISK_FULL, "disk:/"), config, tmp_path)
+
+    assert resultado.outcome is RemediationOutcome.DRY_RUN
+    assert resultado.outcome is not RemediationOutcome.NOT_ENABLED
+    assert "simulando" in resultado.stdout
+
+
+def test_auto_fix_true_dry_run_false_exige_solo_ese_opt_in(tmp_path):
+    # La ejecución real sigue exigiendo auto_fix explícito (tarea #210);
+    # esto no cambia con la corrección de arriba.
+    _instalar_script(tmp_path, "fix_disco.sh", "#!/usr/bin/env bash\nexit 0\n")
+    config = _config(tmp_path, auto_fix=True, dry_run=False)
+    resultado = remediate(_incidente(SignalType.DISK_FULL, "disk:/"), config, tmp_path)
+    assert resultado.outcome is RemediationOutcome.RESOLVED
+
+
+_TOML_SCRIPTS_DRY_RUN = """
+intervalo_monitor_s = 30
+ciclos_persistencia = 2
+enfriamiento_ciclos = 2
+disco_pct = 90
+memoria_disponible_mb = 512
+puerto_timeout_s = 60
+servicio_ciclos = 2
+servicios_vigilados = ["nginx.service"]
+puertos_vigilados = [{ puerto = 80, servicio = "nginx.service" }]
+unidad_memoria_aprobada = ""
+directorio_informes = "{reports_dir}"
+modo_remediacion = "scripts"
+auto_fix = false
+dry_run = true
+timeout_comando_s = 30
+llm_url = "https://proveedor.example/v1/chat/completions"
+llm_modelo = "gpt-oss-120b"
+llm_timeout_s = 30
+llm_cache = false
+"""
+
+
+def test_camino_integrado_con_appconfig_valida_de_load_config(tmp_path):
+    # Lo que pide la revisión post-commit: no un AppConfig construido a
+    # mano en el test, sino uno que salió de verdad de
+    # doctorjk.config.load_config() -- la misma combinación
+    # (modo_remediacion="scripts", auto_fix=false, dry_run=true) que ESA
+    # función sí acepta, y que antes de esta corrección quedaba en
+    # NOT_ENABLED sin haber simulado nada.
+    reports_dir = tmp_path / "informes"
+    reports_dir.mkdir()
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        _TOML_SCRIPTS_DRY_RUN.replace("{reports_dir}", str(reports_dir)), encoding="utf-8"
+    )
+    config = load_config(config_path)
+    assert config.auto_fix is False and config.dry_run is True  # confirma que es la combinación real
+
+    _instalar_script(tmp_path, "fix_servicio.sh", "#!/usr/bin/env bash\necho simulado\nexit 0\n")
+
+    resultado = remediate(
+        _incidente(SignalType.SERVICE_FAILED, "service:nginx.service"), config, tmp_path
+    )
+
+    assert resultado.outcome is RemediationOutcome.DRY_RUN
+    assert "simulado" in resultado.stdout
 
 
 def test_tipo_sin_script_no_ejecuta_nada(tmp_path):

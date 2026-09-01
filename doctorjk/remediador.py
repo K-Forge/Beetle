@@ -105,7 +105,17 @@ def remediate(
     started_at = datetime.now(timezone.utc)
     effective_timeout_s = timeout_s if timeout_s is not None else config.command_timeout_s
 
-    if config.remediation_mode is not RemediationMode.SCRIPTS or not config.auto_fix:
+    # dry_run habilita correr en simulación SIN exigir auto_fix (revisión
+    # post-commit, 2026-09-01): load_config() rechaza auto_fix=true junto
+    # con dry_run=true, así que si esta condición pidiera auto_fix siempre,
+    # el dry-run de Modo 2 sería inalcanzable desde cualquier AppConfig
+    # válida -- nunca se podría simular antes de habilitar la ejecución
+    # real. Una corrección de verdad (dry_run=false) sigue exigiendo el
+    # opt-in explícito de auto_fix (tarea #210); dry_run=true es en sí
+    # mismo un opt-in a *simular*, no requiere ningún otro.
+    if config.remediation_mode is not RemediationMode.SCRIPTS:
+        return _skip(incident, RemediationOutcome.NOT_ENABLED, started_at)
+    if not config.dry_run and not config.auto_fix:
         return _skip(incident, RemediationOutcome.NOT_ENABLED, started_at)
 
     script_name = classify(incident.signal_type)
