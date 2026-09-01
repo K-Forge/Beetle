@@ -186,14 +186,19 @@ def save_and_rotate(
 _OUTCOME_LABEL = {
     RemediationOutcome.RESOLVED: "Resuelto automáticamente",
     RemediationOutcome.FAILED: "Corrección fallida — requiere revisión manual",
+    # DRY_RUN también se anexa (hallazgo de auditoría #2): que quede visible
+    # en el propio informe que no se tocó nada de verdad, igual que exige
+    # Gate 6.3 para Modo 3 -- nadie debe leer esto y creer que se corrigió.
+    RemediationOutcome.DRY_RUN: "[DRY-RUN] Ningún comando fue ejecutado",
 }
 
 
 def render_remediation_section(result: RemediationResult) -> str:
     """Arma la sección de corrección automática que se anexa al informe
-    (tarea #201: "la misma información aparece en el informe generado").
-    Solo se llama para RESOLVED o FAILED -- NOT_MAPPED y NOT_ENABLED no
-    ejecutaron nada, no hay nada que auditar en el informe."""
+    (tarea #201: "la misma información aparece en el informe generado",
+    incluido argv -- hallazgo de auditoría #2). Solo se llama para
+    RESOLVED, FAILED o DRY_RUN -- NOT_MAPPED y NOT_ENABLED no ejecutaron
+    nada, no hay nada que auditar en el informe."""
     lines = [
         "",
         "---",
@@ -202,6 +207,7 @@ def render_remediation_section(result: RemediationResult) -> str:
         "",
         f"- **Resultado:** {_OUTCOME_LABEL[result.outcome]}",
         f"- **Script:** `{result.script}`",
+        f"- **Comando:** `{' '.join(result.argv)}`",
         f"- **Código de salida:** {result.exit_code if result.exit_code is not None else 'sin ejecutar'}",
         f"- **Inicio:** {result.started_at.isoformat()}",
         f"- **Fin:** {result.finished_at.isoformat()}",

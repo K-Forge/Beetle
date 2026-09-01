@@ -232,3 +232,24 @@ def test_append_remediation_es_atomico_no_deja_temporales(tmp_path: Path):
 
     temporales = list(tmp_path.glob("*.tmp"))
     assert temporales == []
+
+
+def test_append_remediation_incluye_el_comando_completo(tmp_path: Path):
+    # Hallazgo de auditoría #2: la auditoría #201 exige que el argv quede
+    # en el informe, no solo el nombre del script.
+    destino = write_report(_diagnostico(), _incidente(), tmp_path, AHORA)
+    append_remediation(destino, _resultado_remediacion(RemediationOutcome.RESOLVED))
+
+    contenido = destino.read_text(encoding="utf-8")
+    assert "fix_servicio.sh postgresql@16-main.service" in contenido
+
+
+def test_append_remediation_marca_dry_run_sin_confundirlo_con_resuelto(tmp_path: Path):
+    destino = write_report(_diagnostico(), _incidente(), tmp_path, AHORA)
+    resultado = _resultado_remediacion(RemediationOutcome.DRY_RUN, exit_code=0)
+
+    append_remediation(destino, resultado)
+
+    contenido = destino.read_text(encoding="utf-8")
+    assert "[DRY-RUN] Ningún comando fue ejecutado" in contenido
+    assert "Resuelto automáticamente" not in contenido
