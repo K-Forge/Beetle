@@ -200,6 +200,45 @@ def test_dry_run_no_se_reporta_como_resuelto(tmp_path):
     assert resultado.outcome is not RemediationOutcome.RESOLVED
 
 
+def test_dry_run_con_fallo_real_sigue_siendo_failed(tmp_path):
+    # Revisión post-commit (2026-09-01): dry_run=True NO debe poder esconder
+    # un fallo real detrás de un DRY_RUN que "suena a que estuvo bien". Si
+    # el script sale con código distinto de 0 en dry-run, sigue siendo
+    # FAILED -- DRY_RUN solo aplica cuando el script corrió y salió 0.
+    _instalar_script(
+        tmp_path,
+        "fix_disco.sh",
+        "#!/usr/bin/env bash\necho 'no pude ni simular' >&2\nexit 1\n",
+    )
+    config = _config(tmp_path, dry_run=True)
+    resultado = remediate(_incidente(SignalType.DISK_FULL, "disk:/"), config, tmp_path)
+
+    assert resultado.outcome is RemediationOutcome.FAILED
+    assert resultado.outcome is not RemediationOutcome.DRY_RUN
+    assert resultado.exit_code == 1
+
+
+def test_dry_run_con_script_ausente_sigue_siendo_failed(tmp_path):
+    config = _config(tmp_path, dry_run=True)
+    resultado = remediate(
+        _incidente(SignalType.SERVICE_FAILED, "service:postgresql.service"), config, tmp_path
+    )
+    assert resultado.outcome is RemediationOutcome.FAILED
+    assert resultado.outcome is not RemediationOutcome.DRY_RUN
+    assert resultado.exit_code is None
+
+
+def test_dry_run_con_timeout_sigue_siendo_failed(tmp_path):
+    _instalar_script(tmp_path, "fix_disco.sh", "#!/usr/bin/env bash\nsleep 5\n")
+    config = _config(tmp_path, dry_run=True)
+    resultado = remediate(
+        _incidente(SignalType.DISK_FULL, "disk:/"), config, tmp_path, timeout_s=0.2
+    )
+    assert resultado.outcome is RemediationOutcome.FAILED
+    assert resultado.outcome is not RemediationOutcome.DRY_RUN
+    assert "tiempo agotado" in resultado.stderr
+
+
 def test_timeout_por_default_usa_command_timeout_s(tmp_path):
     # Hallazgo de auditoría #9: el timeout de remediación no debe ignorar
     # timeout_comando_s -- mismo contrato que el resto de comandos externos.
