@@ -95,14 +95,14 @@ def test_render_snapshot_text_marca_categorias_no_disponibles():
     assert "carga: no disponible" in texto
 
 
-# --------------------------------------------------- _run_find_tolerando_permisos
+# --------------------------------------------------- _run_find_tolerating_permission_errors
 
 
 def test_run_find_tolera_codigo_1_con_salida_parcial():
     # find real bajo /etc como usuario sin privilegios termina en 1 en cuanto
     # topa con un subdirectorio sin permiso, aunque haya listado bien el
     # resto (comprobado contra /etc en este mismo entorno).
-    resultado = recolector._run_find_tolerando_permisos(
+    resultado = recolector._run_find_tolerating_permission_errors(
         ["bash", "-c", "echo /etc/algo; exit 1"], timeout_s=2.0
     )
     assert resultado.success is True
@@ -110,12 +110,12 @@ def test_run_find_tolera_codigo_1_con_salida_parcial():
 
 
 def test_run_find_codigo_distinto_de_cero_y_uno_es_fallo():
-    resultado = recolector._run_find_tolerando_permisos(["bash", "-c", "exit 2"], timeout_s=2.0)
+    resultado = recolector._run_find_tolerating_permission_errors(["bash", "-c", "exit 2"], timeout_s=2.0)
     assert resultado.success is False
 
 
 def test_run_find_timeout():
-    resultado = recolector._run_find_tolerando_permisos(["sleep", "5"], timeout_s=0.05)
+    resultado = recolector._run_find_tolerating_permission_errors(["sleep", "5"], timeout_s=0.05)
     assert resultado.success is False
     assert "tiempo agotado" in resultado.error
 
@@ -144,7 +144,7 @@ def test_collect_evidence_ensambla_las_cinco_secciones(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         recolector,
-        "_run_find_tolerando_permisos",
+        "_run_find_tolerating_permission_errors",
         lambda argv, timeout_s: CommandResult(stdout="", success=True, error=None),
     )
     monkeypatch.setattr(recolector, "take_snapshot", lambda timeout_s: _snapshot_vacio())
@@ -176,7 +176,7 @@ def test_collect_evidence_seccion_fallida_no_descarta_las_demas(monkeypatch, tmp
     monkeypatch.setattr(recolector, "run_command", run_command_falla_journal)
     monkeypatch.setattr(
         recolector,
-        "_run_find_tolerando_permisos",
+        "_run_find_tolerating_permission_errors",
         lambda argv, timeout_s: CommandResult(stdout="", success=True, error=None),
     )
     monkeypatch.setattr(recolector, "take_snapshot", lambda timeout_s: _snapshot_vacio())
@@ -206,7 +206,7 @@ def test_collect_evidence_service_failed_consulta_tambien_la_unidad(monkeypatch,
     monkeypatch.setattr(recolector, "run_command", run_command_falso)
     monkeypatch.setattr(
         recolector,
-        "_run_find_tolerando_permisos",
+        "_run_find_tolerating_permission_errors",
         lambda argv, timeout_s: CommandResult(stdout="", success=True, error=None),
     )
     monkeypatch.setattr(recolector, "take_snapshot", lambda timeout_s: _snapshot_vacio())
@@ -232,7 +232,7 @@ def test_collect_evidence_historial_lista_informes_previos_mas_recientes_primero
     )
     monkeypatch.setattr(
         recolector,
-        "_run_find_tolerando_permisos",
+        "_run_find_tolerating_permission_errors",
         lambda argv, timeout_s: CommandResult(stdout="", success=True, error=None),
     )
     monkeypatch.setattr(recolector, "take_snapshot", lambda timeout_s: _snapshot_vacio())
