@@ -34,7 +34,22 @@ RestartSec=5
 
 # Endurecimiento. Cada linea esta elegida para no romper lo que el agente SI
 # necesita: leer el journal, ejecutar systemctl/df/free/ss y escribir informes.
-NoNewPrivileges=true
+#
+# NoNewPrivileges=true NO esta acá a proposito (bloqueante P0 de auditoria,
+# 2026-09-01): esa directiva usa PR_SET_NO_NEW_PRIVS, que el kernel aplica al
+# proceso Y A TODOS SUS HIJOS -- anula el bit setuid de /usr/bin/sudo para
+# cualquier proceso que este servicio ejecute, asi que "sudo -n <script>"
+# (Modo 2, remediador.py) fallaria siempre, sin importar que tan exacto sea
+# el sudoers. Verificado contra systemd.exec(5). Alternativa evaluada y
+# descartada por complejidad/tiempo: separar un helper root activado por
+# systemd (D-Bus/polkit o un .path unit) en vez de sudo desde este proceso;
+# queda documentada como mejora futura, no como bloqueante del MVP. El
+# trade-off que sí se asume: este proceso puede invocar sudo, pero sudoers
+# (install.sh) sigue restringido a las 4 rutas exactas de scripts-fix/, cada
+# script verifica dueño/permisos de config.toml antes de confiar en ella
+# (comun.sh) y usa un interprete de Python fijo en modo aislado -- una
+# unidad hardened igual, con un canal de escalación deliberado y auditado
+# en vez de uno accidental.
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
@@ -46,9 +61,22 @@ RestrictRealtime=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 
-# ProtectSystem=strict deja todo el sistema en solo-lectura; estas son las dos
-# unicas rutas donde el agente escribe.
-ReadWritePaths=/var/lib/doctorjk
+# ProtectSystem=strict deja TODO el sistema de archivos en solo-lectura para
+# este proceso Y sus hijos -- el namespace de montaje se hereda a traves de
+# fork/exec y sudo NO lo levanta aunque el hijo pase a UID 0 (namespaces son
+# un mecanismo del kernel distinto de los permisos Unix tradicionales:
+# verificado contra systemd.exec(5), "ProtectSystem=", y "mount_namespaces(7)").
+# Sin /var/log acá, fix_disco.sh (Modo 2) fallaria con "Read-only file
+# system" al intentar find -delete sobre logs rotados, sin importar que
+# sudoers lo autorice (bloqueante P0 de auditoria, 2026-09-01).
+#
+# Trade-off asumido: /var/log queda escribible para TODO lo que este
+# servicio ejecute, no solo para fix_disco.sh -- no hay forma de acotar
+# ReadWritePaths por subproceso dentro de una misma unidad systemd. Se
+# limita el dano con lo que ya existia: sudoers restringe la escalacion a
+# las 4 rutas exactas de scripts-fix/, y fix_disco.sh en si mismo solo
+# borra *.log.*.gz y *.log.[0-9]* de mas de 3 dias, nunca un log activo.
+ReadWritePaths=/var/lib/doctorjk /var/log
 
 # Sin esto no puede leer el journal, que es su fuente principal de evidencia.
 SupplementaryGroups=systemd-journal
