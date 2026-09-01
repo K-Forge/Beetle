@@ -17,10 +17,10 @@ def _tick(n: int) -> datetime:
     return T0 + timedelta(seconds=30 * n)
 
 
-def _señal(crossed: bool, key: str = "disk:/", value: str = "95") -> Signal:
+def _señal(crossed: bool, key: str = "disk:/", value: str = "95", tipo: SignalType = SignalType.DISK_FULL) -> Signal:
     return Signal(
         timestamp=T0,
-        signal_type=SignalType.DISK_FULL,
+        signal_type=tipo,
         value=value,
         threshold="90",
         crossed=crossed,
@@ -28,8 +28,15 @@ def _señal(crossed: bool, key: str = "disk:/", value: str = "95") -> Signal:
     )
 
 
+def _detector(persistence_cycles: int, cooldown_cycles: int, tipo: SignalType = SignalType.DISK_FULL) -> Detector:
+    """La mayoría de estos tests solo ejercitan un tipo de señal a la vez;
+    este helper arma el mapeo SignalType -> ciclos que exige el constructor
+    real sin repetirlo en cada test."""
+    return Detector(persistence_cycles={tipo: persistence_cycles}, cooldown_cycles=cooldown_cycles)
+
+
 def test_pico_de_n_menos_uno_no_dispara():
-    detector = Detector(persistence_cycles=3, cooldown_cycles=2)
+    detector = _detector(persistence_cycles=3, cooldown_cycles=2)
 
     t1 = detector.evaluate([_señal(True)], _tick(1))
     t2 = detector.evaluate([_señal(True)], _tick(2))
@@ -42,7 +49,7 @@ def test_pico_de_n_menos_uno_no_dispara():
 
 
 def test_n_ciclos_confirma_incidente_una_sola_vez():
-    detector = Detector(persistence_cycles=2, cooldown_cycles=2)
+    detector = _detector(persistence_cycles=2, cooldown_cycles=2)
 
     t1 = detector.evaluate([_señal(True)], _tick(1))
     t2 = detector.evaluate([_señal(True)], _tick(2))
@@ -56,7 +63,7 @@ def test_n_ciclos_confirma_incidente_una_sola_vez():
 
 
 def test_intermitencia_reinicia_el_candidato():
-    detector = Detector(persistence_cycles=3, cooldown_cycles=2)
+    detector = _detector(persistence_cycles=3, cooldown_cycles=2)
 
     detector.evaluate([_señal(True)], _tick(1))
     detector.evaluate([_señal(False)], _tick(2))  # reinicia
@@ -70,7 +77,7 @@ def test_intermitencia_reinicia_el_candidato():
 
 
 def test_recuperacion_resuelve_tras_n_ciclos_sanos():
-    detector = Detector(persistence_cycles=2, cooldown_cycles=2)
+    detector = _detector(persistence_cycles=2, cooldown_cycles=2)
 
     detector.evaluate([_señal(True)], _tick(1))
     detector.evaluate([_señal(True)], _tick(2))  # confirmado incidente
@@ -84,7 +91,7 @@ def test_recuperacion_resuelve_tras_n_ciclos_sanos():
 
 
 def test_dos_recursos_del_mismo_tipo_tienen_contadores_independientes():
-    detector = Detector(persistence_cycles=2, cooldown_cycles=2)
+    detector = _detector(persistence_cycles=2, cooldown_cycles=2)
 
     t1 = detector.evaluate(
         [_señal(True, key="disk:/"), _señal(True, key="disk:/var")], _tick(1)
@@ -101,7 +108,7 @@ def test_dos_recursos_del_mismo_tipo_tienen_contadores_independientes():
 
 
 def test_lectura_ausente_no_avanza_ni_reinicia_el_contador():
-    detector = Detector(persistence_cycles=3, cooldown_cycles=2)
+    detector = _detector(persistence_cycles=3, cooldown_cycles=2)
 
     detector.evaluate([_señal(True)], _tick(1))
     detector.evaluate([], _tick(2))  # lectura ausente: la clave no aparece este ciclo
@@ -113,7 +120,7 @@ def test_lectura_ausente_no_avanza_ni_reinicia_el_contador():
 
 
 def test_enfriamiento_permite_incidente_nuevo_antes_de_llegar_a_normal():
-    detector = Detector(persistence_cycles=2, cooldown_cycles=3)
+    detector = _detector(persistence_cycles=2, cooldown_cycles=3)
 
     detector.evaluate([_señal(True)], _tick(1))
     detector.evaluate([_señal(True)], _tick(2))  # incidente confirmado
@@ -132,7 +139,7 @@ def test_enfriamiento_permite_incidente_nuevo_antes_de_llegar_a_normal():
 
 
 def test_enfriamiento_completo_vuelve_a_normal_sin_mas_cruces():
-    detector = Detector(persistence_cycles=2, cooldown_cycles=1)
+    detector = _detector(persistence_cycles=2, cooldown_cycles=1)
 
     detector.evaluate([_señal(True)], _tick(1))
     detector.evaluate([_señal(True)], _tick(2))  # incidente
@@ -147,4 +154,61 @@ def test_enfriamiento_completo_vuelve_a_normal_sin_mas_cruces():
 @pytest.mark.parametrize("persistence_cycles,cooldown_cycles", [(0, 1), (1, 0), (-1, 1)])
 def test_umbrales_invalidos_se_rechazan(persistence_cycles, cooldown_cycles):
     with pytest.raises(ValueError):
-        Detector(persistence_cycles=persistence_cycles, cooldown_cycles=cooldown_cycles)
+        _detector(persistence_cycles=persistence_cycles, cooldown_cycles=cooldown_cycles)
+
+
+def test_persistence_cycles_vacio_se_rechaza():
+    with pytest.raises(ValueError, match="vacío"):
+        Detector(persistence_cycles={}, cooldown_cycles=1)
+
+
+# ------------------------------------------------- persistencia por tipo de señal
+
+
+def test_tipos_distintos_confirman_con_su_propio_numero_de_ciclos():
+    # service_failed confirma en 2 ciclos; disk_full necesita 4. Un mismo
+    # ciclo de evaluate() con ambos tipos no debe mezclar sus contadores.
+    detector = Detector(
+        persistence_cycles={SignalType.SERVICE_FAILED: 2, SignalType.DISK_FULL: 4},
+        cooldown_cycles=2,
+    )
+    servicio = lambda crossed: _señal(crossed, key="service:nginx.service", tipo=SignalType.SERVICE_FAILED)
+    disco = lambda crossed: _señal(crossed, key="disk:/", tipo=SignalType.DISK_FULL)
+
+    t1 = detector.evaluate([servicio(True), disco(True)], _tick(1))
+    t2 = detector.evaluate([servicio(True), disco(True)], _tick(2))
+    t3 = detector.evaluate([servicio(True), disco(True)], _tick(3))
+    t4 = detector.evaluate([servicio(True), disco(True)], _tick(4))
+
+    # El servicio confirma en el ciclo 2 (N=2); el disco recién en el 4 (N=4).
+    assert {t.key: t.new_state for t in t2}["service:nginx.service"] is IncidentState.INCIDENT
+    assert "disk:/" not in {t.key for t in t2}
+    assert {t.key: t.new_state for t in t4}["disk:/"] is IncidentState.INCIDENT
+    assert t3 == ()
+
+
+def test_tipo_de_señal_sin_ciclos_configurados_falla_rapido():
+    detector = Detector(persistence_cycles={SignalType.DISK_FULL: 2}, cooldown_cycles=2)
+    señal_sin_mapear = _señal(True, key="port:80:down", tipo=SignalType.PORT_DOWN)
+    with pytest.raises(ValueError, match="port_down"):
+        detector.evaluate([señal_sin_mapear], _tick(1))
+
+
+def test_servicio_falla_confirma_se_recupera_y_resuelve():
+    # Congela el flujo completo que expone el defecto 1 de la auditoría:
+    # un servicio vigilado cruza N ciclos, confirma, se recupera N ciclos
+    # sanos y resuelve -- ya no se queda incidente activo para siempre.
+    detector = _detector(persistence_cycles=2, cooldown_cycles=2, tipo=SignalType.SERVICE_FAILED)
+    clave = "service:postgresql.service"
+    caido = lambda: _señal(True, key=clave, tipo=SignalType.SERVICE_FAILED)
+    sano = lambda: _señal(False, key=clave, tipo=SignalType.SERVICE_FAILED, value="active")
+
+    t1 = detector.evaluate([caido()], _tick(1))
+    t2 = detector.evaluate([caido()], _tick(2))
+    t3 = detector.evaluate([sano()], _tick(3))
+    t4 = detector.evaluate([sano()], _tick(4))
+
+    assert [t.new_state for t in t1] == [IncidentState.CANDIDATE]
+    assert [t.new_state for t in t2] == [IncidentState.INCIDENT]
+    assert t3 == ()  # una sola lectura sana no alcanza a resolver todavía
+    assert [t.new_state for t in t4] == [IncidentState.RESOLVED]
