@@ -92,10 +92,15 @@ read_config_attr() {
   local attr="$1"
   "$VENV_PYTHON" -I - "$CONFIG_PATH" "$attr" <<'PYEOF'
 import sys
+from pathlib import Path
 
 from doctorjk.config import load_config
 
-config = load_config(sys.argv[1])
+# Mismo bug ya corregido en install.sh (2026-09-01): load_config() exige
+# Path y llama path.read_bytes() -- pasarle el str crudo de sys.argv[1]
+# revienta con AttributeError en cuanto cualquier fix_*.sh llama a
+# read_config_attr, sin importar el resto del script.
+config = load_config(Path(sys.argv[1]))
 attribute = sys.argv[2]
 value = getattr(config, attribute)
 
