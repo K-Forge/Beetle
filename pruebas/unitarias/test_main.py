@@ -18,7 +18,9 @@ import pytest
 
 from doctorjk.main import (
     AppContext,
+    build_app,
     ensure_fifo,
+    log_snapshot,
     parse_args,
     run,
     wait_for_next_cycle,
@@ -51,6 +53,20 @@ def test_intervalo_cero_se_rechaza():
 def test_intervalo_negativo_se_rechaza():
     with pytest.raises(SystemExit):
         parse_args(["--interval", "-5"])
+
+
+# ------------------------------- cableado real del pipeline (plan-finalizacion-mvp.md §3.1, defecto 1)
+
+
+def test_build_app_debe_cablear_el_pipeline_no_solo_registrar():
+    # Expone el defecto #1 de la auditoría: build_app() todavía deja
+    # on_snapshot=log_snapshot, así que ningún snapshot llega jamás al
+    # Detector ni al resto del pipeline (Modo 1 nunca corre de verdad).
+    # Este test debe fallar hasta que Gate 2 (main.py como composition root)
+    # reemplace ese callback por uno que evalúe el Detector real.
+    args = parse_args([])
+    contexto = build_app(args)
+    assert contexto.on_snapshot is not log_snapshot
 
 
 # --------------------------------------------------------------------- ensure_fifo
