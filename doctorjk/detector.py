@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable
+from typing import Iterable, Mapping
 from uuid import uuid4
 
 from doctorjk.modelos import Incident, IncidentState, Signal, SignalType
@@ -61,16 +61,39 @@ class _EstadoClave:
 
 
 class Detector:
-    """Máquina de estados con persistencia, una instancia por clave de señal."""
+    """Máquina de estados con persistencia, una instancia por clave de señal.
 
-    def __init__(self, persistence_cycles: int, cooldown_cycles: int) -> None:
-        if persistence_cycles <= 0:
-            raise ValueError("persistence_cycles debe ser mayor que 0")
+    `persistence_cycles` es un mapeo SignalType -> ciclos, no un único número
+    global (plan-finalizacion-mvp.md Gate 1.3, defecto 5): un servicio caído
+    y un puerto ocupado no deberían confirmarse con la misma cantidad de
+    ciclos, porque `servicio_ciclos` y `puerto_timeout_s` son parámetros
+    independientes en config.toml. Cada tipo de señal que el detector reciba
+    en evaluate() debe estar en el mapeo -- fail fast, no hay valor por
+    defecto implícito que pueda esconder un tipo sin configurar.
+    """
+
+    def __init__(self, persistence_cycles: Mapping[SignalType, int], cooldown_cycles: int) -> None:
+        if not persistence_cycles:
+            raise ValueError("persistence_cycles no puede estar vacío")
+        for tipo, ciclos in persistence_cycles.items():
+            if ciclos <= 0:
+                raise ValueError(
+                    f"persistence_cycles[{tipo.value}] debe ser mayor que 0, se recibió {ciclos!r}"
+                )
         if cooldown_cycles <= 0:
             raise ValueError("cooldown_cycles debe ser mayor que 0")
-        self._persistence_cycles = persistence_cycles
+        self._persistence_cycles = dict(persistence_cycles)
         self._cooldown_cycles = cooldown_cycles
         self._claves: dict[str, _EstadoClave] = {}
+
+    def _persistence_for(self, signal_type: SignalType) -> int:
+        try:
+            return self._persistence_cycles[signal_type]
+        except KeyError:
+            raise ValueError(
+                f"no hay ciclos de persistencia configurados para el tipo de señal "
+                f"{signal_type.value!r}"
+            ) from None
 
     def evaluate(self, signals: Iterable[Signal], now: datetime) -> tuple[Transition, ...]:
         """Procesa un ciclo de señales y devuelve solo las transiciones que
@@ -148,6 +171,10 @@ class Detector:
         # Cruzada desde normal o desde en pleno enfriamiento: arranca un
         # candidato nuevo (tarea #177: dedup solo bloquea mientras el
         # incidente anterior sigue activo, no durante el enfriamiento).
+        # Se valida acá, en el primer cruce, que el tipo tenga ciclos
+        # configurados -- fail fast, no esperar al segundo ciclo para
+        # descubrir que falta el mapeo (CONTEXTO-IA.md §8.1).
+        self._persistence_for(signal.signal_type)
         anterior = estado_clave.state
         estado_clave.state = IncidentState.CANDIDATE
         estado_clave.consecutive_count = 1
@@ -180,8 +207,9 @@ class Detector:
                 incident=None,
             )
 
+        ciclos_requeridos = self._persistence_for(signal.signal_type)
         estado_clave.consecutive_count += 1
-        if estado_clave.consecutive_count < self._persistence_cycles:
+        if estado_clave.consecutive_count < ciclos_requeridos:
             return None  # sigue siendo candidato, todavía no alcanza N
 
         estado_clave.state = IncidentState.INCIDENT
@@ -201,7 +229,7 @@ class Detector:
             signal_type=signal.signal_type,
             previous_state=IncidentState.CANDIDATE,
             new_state=IncidentState.INCIDENT,
-            reason=f"persistió {self._persistence_cycles} ciclos consecutivos, se confirma incidente",
+            reason=f"persistió {ciclos_requeridos} ciclos consecutivos, se confirma incidente",
             incident=incidente,
         )
 
@@ -214,8 +242,9 @@ class Detector:
             estado_clave.consecutive_count = 0
             return None
 
+        ciclos_requeridos = self._persistence_for(signal.signal_type)
         estado_clave.consecutive_count += 1
-        if estado_clave.consecutive_count < self._persistence_cycles:
+        if estado_clave.consecutive_count < ciclos_requeridos:
             return None  # sano, pero todavía no alcanza N para resolver
 
         estado_clave.state = IncidentState.RESOLVED
@@ -233,6 +262,6 @@ class Detector:
             signal_type=signal.signal_type,
             previous_state=IncidentState.INCIDENT,
             new_state=IncidentState.RESOLVED,
-            reason=f"se normalizó durante {self._persistence_cycles} ciclos consecutivos, incidente resuelto",
+            reason=f"se normalizó durante {ciclos_requeridos} ciclos consecutivos, incidente resuelto",
             incident=incidente_resuelto,
         )
