@@ -387,6 +387,23 @@ disparo cae dentro de la ventana estimada del protocolo.
 
 ### 9.2 Protocolo v2 (nada ejecutado; secuencial, reversible, con cleanup y salud tras cada escenario)
 
+**Bloqueante P0 corregido antes de esta versión (2026-09-01), ya en
+código y probado en local:** `fix_puerto.sh` autorizaba a detener al
+ocupante consultando `servicios_vigilados` -- la misma lista que dispara
+`service_failed`. Detener a un ocupante que también estuviera vigilado le
+haría creer al monitor que ese servicio se cayó solo, y `fix_servicio.sh`
+lo reiniciaría, pudiendo recrear `port_occupied` en bucle. Se agregó una
+allowlist separada, `ocupantes_puerto_aprobados` (clave TOML en español,
+atributo Python `approved_port_occupants: tuple[str, ...]`, vacía por
+defecto), y `fix_puerto.sh` ahora consulta esa lista, nunca
+`servicios_vigilados`, para decidir si puede detener al ocupante. Cubierto
+con pruebas nuevas en `test_config.py` (validación, vacío por defecto,
+duplicados, metacaracteres, independencia de las dos listas) y en
+`test_scripts_fix.py` (un ocupante vigilado-pero-no-aprobado falla
+cerrado; uno aprobado-pero-no-vigilado sí se detiene). El ocupante
+sintético de este protocolo (`doctorjk-test-occupier.service`) va SOLO en
+`ocupantes_puerto_aprobados`, nunca en `servicios_vigilados` (§9.2.1).
+
 **Reglas duras de todo el protocolo:**
 
 - Si cualquier paso de cleanup falla, o el chequeo de salud posterior no
@@ -405,7 +422,7 @@ disparo cae dentro de la ventana estimada del protocolo.
   el pipeline completo" dejan de ser incompatibles.
 - **Por qué sigue sin hacer falta un snapshot nuevo:** cada mutación es
   reversible por diseño (unidades transitorias que nunca tocan disco,
-  backup único de `config.toml`/`.env` antes de tocar nada, reinstalación
+  backup único de `config.toml` antes de tocar nada, reinstalación
   idempotente ya probada en local). Se revisita esta decisión si algún paso
   revela lo contrario.
 
@@ -427,11 +444,13 @@ tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net \
 git archive HEAD | tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net \
   "rm -rf /tmp/doctorjk-deploy && mkdir -p /tmp/doctorjk-deploy && tar -x -C /tmp/doctorjk-deploy"
 
-# Backup único de config/.env -- sirve tanto para el rollback de este paso
-# como para la restauración final de la Fase E.
+# Backup único de config.toml -- sirve tanto para el rollback de este paso
+# como para la restauración final de la Fase E. .env NO se toca en ningún
+# paso de este protocolo (llm_url vive en config.toml, no en .env) --
+# corrección del hallazgo (f): no duplicar un archivo con la credencial
+# real si nunca se va a modificar ni restaurar.
 tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
   sudo cp /etc/doctorjk/config.toml /etc/doctorjk/config.toml.bak-gate44
-  sudo cp /etc/doctorjk/.env /etc/doctorjk/.env.bak-gate44
 "
 
 tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "sudo /tmp/doctorjk-deploy/instalador/install.sh"
@@ -442,19 +461,36 @@ Verificar: `systemd-analyze verify`, `sudo -n -l` para los 4 scripts,
 tiene `install.sh`), ambas unidades (`doctorjk`, `doctorjk-trigger`)
 activas.
 
-**Rollback si algo de esto falla (corrección del hallazgo 6):** nunca
-`desinstalar.sh` — dejaría el agente completamente fuera. El VPS ya tiene
-en `/home/beetle/Beetle` el checkout de `main` en `6166bf9` (Gate 3.2), que
-este paso nunca toca porque despliega a `/tmp/doctorjk-deploy`, un
-directorio aparte. Restaurar es re-correr el instalador viejo desde ese
-checkout intacto:
+**Rollback si algo de esto falla (corrección del hallazgo 6, precisada por
+el hallazgo (e)):** nunca `desinstalar.sh` — dejaría el agente
+completamente fuera. El VPS ya tiene en `/home/beetle/Beetle` el checkout
+de `main` en `6166bf9` (Gate 3.2), que este paso nunca toca porque
+despliega a `/tmp/doctorjk-deploy`, un directorio aparte. Pero re-correr
+el instalador viejo **por sí solo no alcanza para un revert exacto**: ese
+`install.sh` no sabe nada de `scripts-fix/` ni de `/etc/sudoers.d/doctorjk`
+(no existían en Gate 3.2), así que no los toca -- si el intento de Gate 4
+llegó a crearlos antes de fallar, quedarían huérfanos en disco. Que
+`NoNewPrivileges=true` vuelva (sí lo hace: el `install.sh` viejo reinstala
+`doctorjk.service` desde su propia plantilla) los deja inertes -- sudo no
+podría usarlos igual -- pero inertes no es lo mismo que removidos, y dejar
+una concesión de sudoers huérfana no es un rollback correcto. El rollback
+completo re-corre el instalador viejo Y borra explícitamente lo que ese
+instalador no sabe limpiar:
 
 ```bash
-tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "sudo /home/beetle/Beetle/instalador/install.sh"
+tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
+  sudo /home/beetle/Beetle/instalador/install.sh
+  sudo rm -f /etc/sudoers.d/doctorjk
+  sudo rm -rf /opt/doctorjk/scripts-fix
+"
 ```
 
-`install.sh` es idempotente y preserva `config.toml`/`.env` existentes, así
-que esto vuelve al estado exacto de Gate 3.2 sin perder configuración.
+`install.sh` es idempotente y preserva `config.toml` existente (nunca toca
+`.env`, ver hallazgo (f) más abajo), así que esto vuelve al estado
+funcional de Gate 3.2 sin perder configuración. Verificar tras el rollback,
+igual que en el Paso 0 normal: `grep NoNewPrivileges` sobre la unidad
+instalada (debe volver a aparecer), `/opt/doctorjk/scripts-fix` inexistente,
+`/etc/sudoers.d/doctorjk` inexistente.
 
 #### 9.2.1 Fase A — preparar unidades sintéticas y config temporal (todavía sin provocar nada)
 
@@ -467,7 +503,7 @@ desde disco:
 |---|---|---|
 | `doctorjk-test-svc.service` | `service_failed` | falla la primera vez que arranca, queda "active" (sleep) la segunda — así el reinicio de `fix_servicio.sh` sí prueba algo |
 | `doctorjk-test-owner.service` | dueño esperado del puerto 18080 | se arranca una vez y se detiene, para que quede "cargada" y `systemctl restart` (el que corre `fix_puerto.sh`) la reconozca |
-| `doctorjk-test-occupier.service` | ocupante indebido del puerto 18080 | listening en 18080 mientras `doctorjk-test-owner` está detenida = `port_occupied` |
+| `doctorjk-test-occupier.service` | ocupante indebido del puerto 18080 | listening en 18080 mientras `doctorjk-test-owner` está detenida = `port_occupied`. Se define con `--collect`: al detenerla, systemd la descarga de inmediato -- **corrección del hallazgo (b):** cada vez que hace falta, se recrea con el `systemd-run` completo (nunca un `systemctl start doctorjk-test-occupier` a secas, que fallaría con "unit not found" si ya fue recolectada) |
 | `doctorjk-test-memhog.service` | consumidor de memoria acotado | `MemoryMax=1200M`, `MemorySwapMax=0`; asigna ~1000 MB una sola vez (marcador en `/run`), así un `restart` real libera la memoria en vez de reasignarla |
 | `doctorjk-test-llmstub.service` | stub OpenAI-compatible en `127.0.0.1` | ver §9.2.2 |
 
@@ -510,11 +546,18 @@ lejos del 90% real.
 
 Respaldo ya hecho en el Paso 0. Editar `/etc/doctorjk/config.toml`:
 
-- `servicios_vigilados` += `"doctorjk-test-svc.service"`,
-  `"doctorjk-test-occupier.service"` (sin esto, `fix_servicio.sh` y
-  `fix_puerto.sh` escalan en vez de actuar sobre unidades que no reconocen).
+- `servicios_vigilados` += `"doctorjk-test-svc.service"` (sin esto,
+  `fix_servicio.sh` escala en vez de reiniciarla).
 - `puertos_vigilados` += `{ puerto = 18080, servicio =
   "doctorjk-test-owner.service" }`.
+- `ocupantes_puerto_aprobados` += `"doctorjk-test-occupier.service"`
+  (**corrección del hallazgo P0, 2026-09-01:** `doctorjk-test-occupier`
+  va SOLO acá, nunca en `servicios_vigilados`. `fix_puerto.sh` ahora
+  autoriza a detener un ocupante consultando esta allowlist nueva, no
+  `servicios_vigilados` -- ver `doctorjk/config.py` y `scripts-fix/
+  fix_puerto.sh`. Si el ocupante estuviera también vigilado, detenerlo
+  dispararía `service_failed` sobre sí mismo y `fix_servicio.sh` lo
+  reiniciaría, pudiendo recrear `port_occupied` en bucle).
 - `disco_pct` → `5` (original respaldado en el Paso 0).
 - `memoria_disponible_mb` → `$(free -m | awk '/^Mem:/{print $7}') - 700`
   calculado en el momento (con ~8.9 GiB libres da un umbral ~8.2 GiB —
@@ -615,13 +658,19 @@ no muta nada, y se limpia antes de pasar al siguiente:
 - `fix_disco.sh`: `fallocate -l "$(cat /tmp/doctorjk-filler-kb)K"
   /var/log/doctorjk-test.log.1.gz && sudo touch -d '10 days ago'
   /var/log/doctorjk-test.log.1.gz` → `sudo -n
-  /opt/doctorjk/scripts-fix/fix_disco.sh` → confirmar `[DRY-RUN]` y que el
-  archivo sigue ahí → cleanup: `sudo rm -f /var/log/doctorjk-test.log.1.gz`.
-- `fix_puerto.sh`: `sudo systemctl start doctorjk-test-occupier` (definida
-  igual que `doctorjk-test-owner` en §9.2.1, con `--collect`) → `sudo -n
+  /opt/doctorjk/scripts-fix/fix_disco.sh /` (**corrección del hallazgo
+  (c):** el script exige `$1` = punto de montaje; sin argumento falla con
+  "uso: fix_disco.sh <punto-de-montaje>", ni siquiera llega a mirar
+  `dry_run`) → confirmar `[DRY-RUN]` y que el archivo sigue ahí → cleanup:
+  `sudo rm -f /var/log/doctorjk-test.log.1.gz`.
+- `fix_puerto.sh`: recrear el ocupante (**corrección del hallazgo (b)**,
+  ver tabla arriba -- nunca `systemctl start` a secas):
+  `sudo systemd-run --unit=doctorjk-test-occupier --collect python3 -m
+  http.server 18080 --bind 127.0.0.1` → `sudo -n
   /opt/doctorjk/scripts-fix/fix_puerto.sh 18080` → confirmar `[DRY-RUN]` y
   que el ocupante sigue escuchando (no `doctorjk-test-owner`) → cleanup:
-  `sudo systemctl stop doctorjk-test-occupier`.
+  `sudo systemctl stop doctorjk-test-occupier` (la recolecta sola por el
+  `--collect`).
 - `fix_memoria.sh`: `sudo systemd-run --unit=doctorjk-test-memhog
   --property=MemoryMax=1200M --property=MemorySwapMax=0 --collect
   python3 /tmp/doctorjk-deploy/memhog.py` (script de una sola asignación,
@@ -686,31 +735,45 @@ de salud de alguno falla, se para ahí, no se sigue con el siguiente:**
 (`RESOLVED`, la unidad queda `active`/sleep). **Idempotencia directa:**
 `sudo -n /opt/doctorjk/scripts-fix/fix_servicio.sh
 doctorjk-test-svc.service` con la unidad ya sana → sale 0 sin reiniciar.
-Cleanup: `systemctl stop doctorjk-test-svc`, `reset-failed`, borrar
-marcador, quitar de `servicios_vigilados`. Salud: `doctorjk-test-svc` no
-queda cargada como `failed`.
+**Cleanup (corrección del hallazgo (a)):** ninguno acá. `doctorjk-test-svc`
+sigue en `servicios_vigilados` con `auto_fix=true` durante el resto de la
+Fase C/D -- detenerla ahora la dejaría `failed` de nuevo mientras sigue
+vigilada y con remediación real habilitada, y el propio monitor (con los
+intervalos rápidos de la Fase A) podría reiniciarla sola antes de que este
+protocolo termine de editar `servicios_vigilados`, o competir con ese
+edit. Se la deja **activa** (ya sana) hasta la Fase E: recién ahí, con
+`config.toml` restaurado y `doctorjk.service` ya reiniciado con la config
+original, se la detiene. Salud de este paso: la unidad quedó `active`, no
+`failed`.
 
 **(b) `disk_full`** — recalcular el filler (mismo bloque de §9.2.1, el
 disco ya pudo variar) y crearlo. Confirmar remediación real: el script
 lista el candidato, lo borra, la postcondición pasa. **Idempotencia
-directa:** correr `fix_disco.sh` de nuevo con el disco ya bajo el umbral →
-"ya está bajo el umbral" sin acción. Cleanup: confirmar que no queda ningún
-`doctorjk-test.log*` residual (ya lo borró el propio script). Salud:
-`df` vuelve a ~3%.
+directa:** `sudo -n /opt/doctorjk/scripts-fix/fix_disco.sh /` con el disco
+ya bajo el umbral (corrección del hallazgo (c): siempre con el argumento
+`/`) → "ya está bajo el umbral" sin acción. Cleanup: confirmar que no
+queda ningún `doctorjk-test.log*` residual (ya lo borró el propio script).
+Salud: `df` vuelve a ~3%.
 
-**(c) `port_occupied`** — `sudo systemctl start doctorjk-test-occupier`
-(con `doctorjk-test-owner` detenida). Confirmar remediación real: se
-detiene el ocupante, se reinicia `doctorjk-test-owner`, verificado con
-`ss` (no solo `is-active`). **Idempotencia directa:** `fix_puerto.sh 18080`
-con `doctorjk-test-owner` ya activa → "ya tiene el puerto" sin acción.
-**Chequeo adicional (bonus, ejercita el hallazgo del ocupante que ya
-desapareció):** repetir el escenario deteniendo `doctorjk-test-occupier` A
-MANO antes de correr `fix_puerto.sh` — confirmar que igual reinicia y
+**(c) `port_occupied`** — recrear el ocupante (corrección del hallazgo
+(b): `systemd-run --unit=doctorjk-test-occupier --collect python3 -m
+http.server 18080 --bind 127.0.0.1`, nunca `systemctl start` a secas —
+ver tabla de §9.2.1) con `doctorjk-test-owner` detenida. Confirmar
+remediación real: se detiene el ocupante, se reinicia
+`doctorjk-test-owner`, verificado con `ss` (no solo `is-active`).
+**Idempotencia directa:** `fix_puerto.sh 18080` con `doctorjk-test-owner`
+ya activa → "ya tiene el puerto" sin acción. **Chequeo adicional (bonus,
+ejercita el hallazgo del ocupante que ya desapareció):** recrear el
+ocupante una vez más, detenerlo A MANO (`sudo systemctl stop
+doctorjk-test-occupier`, que además lo recolecta por el `--collect`) antes
+de correr `fix_puerto.sh` de nuevo — confirmar que igual reinicia y
 verifica `doctorjk-test-owner` con `ss`, sin declarar éxito solo porque
-nadie ocupaba el puerto en ese instante. Cleanup: dejar
-`doctorjk-test-owner` corriendo (hace falta para la Fase D) o detenerla si
-la Fase D no sigue de inmediato. Salud: `ss -tln` muestra 18080 con el PID
-de `doctorjk-test-owner`.
+nadie ocupaba el puerto en ese instante. Cleanup: `doctorjk-test-occupier`
+ya quedó recolectada (no existe más, por el `--collect`) — nada que
+detener ahí. `doctorjk-test-owner` se deja **corriendo** (la usa la Fase D
+tal cual, no hace falta recrearla). Salud: `ss -tln` muestra 18080 con el
+PID de `doctorjk-test-owner`, y `systemctl list-units doctorjk-test-occupier*`
+no encuentra nada cargado.
 
 **(d) `memory_low`** — arrancar `doctorjk-test-memhog` (mismo diseño que
 B2). Confirmar precondición de cgroup, restart real, postcondición
@@ -721,36 +784,66 @@ borrar marcador. Salud: `free -m` vuelve cerca de la línea base de §9.1.
 
 #### 9.2.5 Fase D — tipo no mapeado (`port_down`)
 
-Con `doctorjk-test-owner` y `doctorjk-test-occupier` ambas detenidas
-(nadie escucha en 18080, pero sigue en `puertos_vigilados`). Confirmar en
-el journal: `"sin script de corrección para port_down, queda solo
-diagnosticado"`, `RemediationOutcome.NOT_MAPPED` en el informe, y que el
-informe generado NO trae sección "Corrección automática". No hay nada que
-limpiar (el estado final esperado — nadie escuchando — ya es el estado en
-el que se provocó). Salud: igual que antes, nada más cambió.
+Detener `doctorjk-test-owner` (`doctorjk-test-occupier` ya no existe desde
+el `--collect` del paso anterior) — nadie escucha en 18080, pero sigue en
+`puertos_vigilados`.
+
+**Corrección del hallazgo (d):** `remediador._skip()` (la rama que produce
+`NOT_MAPPED`) nunca llama a `_log_result()` -- eso solo pasa cuando
+`classify()` sí encuentra un script y se llega a ejecutarlo. Lo único
+observable desde afuera para `NOT_MAPPED` es: (1) el mensaje que sí loguea
+`remediador.remediate()` directamente antes de retornar, y (2) que
+`informe.append_remediation()` no escribe nada para este resultado. No hay
+forma de "ver" el valor `RemediationOutcome.NOT_MAPPED` en el informe --
+no aparece ahí, ni podría, porque la función que lo devuelve nunca llega a
+escribir esa sección. Confirmar entonces, sin afirmar el outcome dentro
+del informe:
+
+- En el journal: `"sin script de corrección para port_down, queda solo
+  diagnosticado"`.
+- En el informe generado para este incidente: el diagnóstico del LLM (del
+  stub) está, pero NO hay sección "Corrección automática" -- su ausencia
+  es la evidencia, no un texto que la nombre.
+
+No hay nada que limpiar (el estado final esperado — nadie escuchando — ya
+es el estado en el que se provocó, y `doctorjk-test-owner` de todos modos
+se detiene en la Fase E). Salud: igual que antes, nada más cambió.
 
 #### 9.2.6 Fase E — cierre: apagar todo y restaurar
 
+**Corrección del hallazgo (a) -- el orden acá importa:** `config.toml` se
+restaura y `doctorjk.service` se reinicia **primero**. Recién con el
+agente ya corriendo la config original (`servicios_vigilados` sin
+`doctorjk-test-svc`, `auto_fix=false`) es seguro detener las unidades de
+prueba -- si se detuvieran antes, con la config temporal todavía activa y
+los intervalos rápidos de la Fase A, el propio monitor podría reaccionar a
+mitad de este bloque.
+
 ```bash
 tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
+  sudo cp /etc/doctorjk/config.toml.bak-gate44 /etc/doctorjk/config.toml
+  sudo systemctl restart doctorjk.service
   sudo systemctl stop doctorjk-test-llmstub doctorjk-test-owner \
-    doctorjk-test-occupier doctorjk-test-svc doctorjk-test-memhog 2>/dev/null || true
+    doctorjk-test-svc doctorjk-test-memhog 2>/dev/null || true
   sudo systemctl reset-failed doctorjk-test-svc 2>/dev/null || true
   sudo rm -f /run/doctorjk-test-svc.marker /run/doctorjk-test-memhog.marker \
     /var/log/doctorjk-test.log.1.gz /tmp/doctorjk-llmstub.py /tmp/doctorjk-filler-kb
-  sudo cp /etc/doctorjk/config.toml.bak-gate44 /etc/doctorjk/config.toml
-  sudo systemctl restart doctorjk.service
   systemctl list-units --all 'doctorjk-test-*' --no-pager
 "
 ```
 
+(`doctorjk-test-occupier` no aparece en este `stop`: ya fue recolectada
+sola por su propio `--collect` en la Fase C.)
+
 Las unidades `doctorjk-test-*` quedan detenidas y sin marcador; al ser
 transitorias nunca se escribieron a disco, así que un reboot del VPS las
-borraría igual aunque algo de esto fallara. Verificación final: los mismos
-5 chequeos de §9.1 (servicios reales activos, carga, disco ~3%, memoria
-~8.9 GiB libres, `config.toml` con `modo_remediacion="diagnostico"`,
-`auto_fix=false`, `dry_run=true`, `unidad_memoria_aprobada=""` como estaba)
-más `systemctl list-units --all 'doctorjk-test-*'` vacío o todo `inactive`.
+borraría igual aunque algo de esto fallara. `.env` nunca se tocó (hallazgo
+(f)), así que no hay nada que restaurar ahí. Verificación final: los
+mismos 5 chequeos de §9.1 (servicios reales activos, carga, disco ~3%,
+memoria ~8.9 GiB libres, `config.toml` con `modo_remediacion="diagnostico"`,
+`auto_fix=false`, `dry_run=true`, `unidad_memoria_aprobada=""`,
+`ocupantes_puerto_aprobados=[]` como estaba) más `systemctl list-units
+--all 'doctorjk-test-*'` vacío o todo `inactive`.
 
 ### 9.3 Lo que este protocolo NO hace
 
