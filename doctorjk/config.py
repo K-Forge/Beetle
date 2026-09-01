@@ -61,6 +61,12 @@ class AppConfig:
     port_cycles: int
     monitored_services: tuple[str, ...]
     monitored_ports: tuple[MonitoredPort, ...]
+    # Única unidad que fix_memoria.sh (Modo 2, Gate 4) puede reiniciar para
+    # liberar memoria. Cadena vacía = ninguna aprobada: el script debe
+    # escalar en vez de actuar (plan-finalizacion-mvp.md §4.2 -- "si no hay
+    # una unidad aprobada identificable, escalar; no matar procesos
+    # arbitrarios ni escribir a drop_caches").
+    approved_memory_unit: str
     reports_dir: Path
     remediation_mode: RemediationMode
     auto_fix: bool
@@ -187,6 +193,21 @@ def _monitored_services_list(key_name: str) -> _Validator:
     return validate
 
 
+def _approved_memory_unit(key_name: str) -> _Validator:
+    def validate(value: object) -> object:
+        if not isinstance(value, str):
+            raise ConfigError(f"'{key_name}' debe ser texto, se recibió {value!r}")
+        if value == "":
+            return value  # explícitamente ninguna: fix_memoria.sh debe escalar
+        if not _is_valid_unit(value):
+            raise ConfigError(
+                f"'{key_name}' debe ser \"\" o una unidad systemd válida, se recibió {value!r}"
+            )
+        return value
+
+    return validate
+
+
 def _monitored_ports_list(key_name: str) -> _Validator:
     def validate(value: object) -> object:
         if not isinstance(value, list) or not value:
@@ -253,6 +274,10 @@ _SCHEMA: dict[str, tuple[str, _Validator]] = {
     "puertos_vigilados": (
         "monitored_ports",
         _monitored_ports_list("puertos_vigilados"),
+    ),
+    "unidad_memoria_aprobada": (
+        "approved_memory_unit",
+        _approved_memory_unit("unidad_memoria_aprobada"),
     ),
     "directorio_informes": ("reports_dir", _absolute_directory("directorio_informes")),
     "modo_remediacion": ("remediation_mode", _remediation_mode("modo_remediacion")),
@@ -332,6 +357,7 @@ def load_config(path: Path) -> AppConfig:
         port_cycles=max(computed_port_cycles, 1),
         monitored_services=values["monitored_services"],
         monitored_ports=values["monitored_ports"],
+        approved_memory_unit=values["approved_memory_unit"],
         reports_dir=values["reports_dir"],
         remediation_mode=values["remediation_mode"],
         auto_fix=values["auto_fix"],

@@ -40,6 +40,13 @@ puertos_vigilados = [
   { puerto = 5432, servicio = "postgresql.service" },
 ]
 
+# Única unidad que el Modo 2 puede reiniciar para liberar memoria (script
+# fix_memoria.sh). Vacío ("") por defecto: sin una unidad aprobada
+# explícitamente, el script escala en vez de matar procesos arbitrarios.
+# Ajustar solo a un servicio propio del cliente cuyo consumo de memoria sea
+# seguro de interrumpir con un restart.
+unidad_memoria_aprobada = ""
+
 # Directorio donde quedan los informes .md y su evidencia cruda asociada.
 directorio_informes = "/var/lib/doctorjk/informes"
 

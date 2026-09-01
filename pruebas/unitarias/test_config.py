@@ -22,6 +22,7 @@ puertos_vigilados = [
   { puerto = 80, servicio = "nginx.service" },
   { puerto = 5432, servicio = "postgresql.service" },
 ]
+unidad_memoria_aprobada = ""
 directorio_informes = "/var/lib/doctorjk/informes"
 modo_remediacion = "diagnostico"
 auto_fix = false
@@ -57,6 +58,7 @@ def test_config_valida_produce_appconfig_tipado(tmp_path):
         MonitoredPort(port=80, service="nginx.service"),
         MonitoredPort(port=5432, service="postgresql.service"),
     )
+    assert config.approved_memory_unit == ""
     assert str(config.reports_dir) == "/var/lib/doctorjk/informes"
     assert config.remediation_mode is RemediationMode.DIAGNOSTIC
     assert config.auto_fix is False
@@ -207,6 +209,28 @@ def test_puertos_vigilados_duplicado_falla(tmp_path):
     )
     ruta = _escribir(tmp_path, contenido)
     with pytest.raises(ConfigError, match="puertos_vigilados"):
+        load_config(ruta)
+
+
+def test_unidad_memoria_aprobada_vacia_es_valida(tmp_path):
+    ruta = _escribir(tmp_path, TOML_VALIDO)
+    assert load_config(ruta).approved_memory_unit == ""
+
+
+def test_unidad_memoria_aprobada_con_nombre_valido(tmp_path):
+    contenido = TOML_VALIDO.replace(
+        'unidad_memoria_aprobada = ""', 'unidad_memoria_aprobada = "appcarga.service"'
+    )
+    ruta = _escribir(tmp_path, contenido)
+    assert load_config(ruta).approved_memory_unit == "appcarga.service"
+
+
+def test_unidad_memoria_aprobada_con_metacaracteres_falla(tmp_path):
+    contenido = TOML_VALIDO.replace(
+        'unidad_memoria_aprobada = ""', 'unidad_memoria_aprobada = "../etc/passwd"'
+    )
+    ruta = _escribir(tmp_path, contenido)
+    with pytest.raises(ConfigError, match="unidad_memoria_aprobada"):
         load_config(ruta)
 
 
