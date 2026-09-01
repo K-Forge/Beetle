@@ -462,16 +462,27 @@ tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net \
 git archive HEAD | tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net \
   "rm -rf /tmp/doctorjk-deploy && mkdir -p /tmp/doctorjk-deploy && tar -x -C /tmp/doctorjk-deploy"
 
+tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "sudo /tmp/doctorjk-deploy/instalador/install.sh"
+
 # Backup único de config.toml -- sirve tanto para el rollback de este paso
 # como para la restauración final de la Fase E. .env NO se toca en ningún
 # paso de este protocolo (llm_url vive en config.toml, no en .env) --
 # corrección del hallazgo (f): no duplicar un archivo con la credencial
 # real si nunca se va a modificar ni restaurar.
+#
+# **Corrección crítica (ejecución en vivo, 2026-09-01):** este backup va
+# DESPUÉS de install.sh, no antes. La versión anterior lo tomaba antes --
+# capturando la config de Gate 3 SIN las claves que la migración de
+# install.sh recién agrega -- y un restore de emergencia real durante la
+# Fase B con ese backup tumbó doctorjk.service en un crash-loop real
+# (ConfigError: "falta(n) unidad_memoria_aprobada, ocupantes_puerto_aprobados"),
+# exactamente el bug que la migración existe para evitar. El backup correcto
+# es el estado YA migrado -- Gate 3 + las dos claves nuevas con su default
+# fail-closed -- que es también el estado exacto al que debe volver la
+# Fase E.
 tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
   sudo cp /etc/doctorjk/config.toml /etc/doctorjk/config.toml.bak-gate44
 "
-
-tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "sudo /tmp/doctorjk-deploy/instalador/install.sh"
 ```
 
 Verificar: `systemd-analyze verify`, `sudo -n -l` para los 4 scripts,
@@ -643,6 +654,28 @@ Respaldo ya hecho en el Paso 0. Editar `/etc/doctorjk/config.toml`:
   dispararía `service_failed` sobre sí mismo y `fix_servicio.sh` lo
   reiniciaría, pudiendo recrear `port_occupied` en bucle).
 - `disco_pct` → `5` (original respaldado en el Paso 0).
+
+**Bloqueante nuevo, encontrado en ejecución real (2026-09-01), sin
+resolver todavía -- requiere decisión antes del próximo intento:**
+`monitor.py::parse_disk_output()` corre `df` y evalúa `disco_pct` contra
+**todos los mount points reales**, no solo `/` (a diferencia de
+`fix_disco.sh`, que sí está acotado a `/`). En el VPS real, bajar
+`disco_pct` a 5 disparó `disk_full` también en `/boot` (22% de uso real),
+`/boot/efi` (7%) y `/sys/firmware/efi/efivars` (6%) -- tres incidentes no
+planeados, confirmados y diagnosticados (con el stub de LLM) antes de que
+el protocolo llegara a tocar el filler de `/`. Inofensivo en los hechos
+(`dry_run=true`, y `fix_disco.sh` habría escalado igual ante cualquier
+mount que no sea `/`), pero rompe la regla dura de "ningún estado
+intermedio dispara un incidente no planeado" y generó 3 informes/llamadas
+al stub extra sin cuenta. Ningún umbral por debajo de ~25% evita los tres
+mounts reales a la vez, y subir el filler de `/` para cruzar un umbral esa
+alto excede el tope de 4 GiB (harían falta ~32 GiB) -- las dos
+restricciones ya acordadas (filler ≤4 GiB, umbral bajo) son
+estructuralmente incompatibles con que `disco_pct` sea global. Antes de
+reintentar Fase B: decidir si (a) se acepta esto como ruido esperado y se
+documenta+limpia explícitamente (ambas cosas ya inofensivas, solo falta
+declararlo), o (b) se cambia el enfoque de la prueba de disco. No se
+resuelve acá -- es una decisión de protocolo, no un bug de una línea.
 - `memoria_disponible_mb` → `$(free -m | awk '/^Mem:/{print $7}') - 700`
   calculado en el momento (con ~8.9 GiB libres da un umbral ~8.2 GiB —
   cruzarlo exige que el memhog de 1000 MB acotado por cgroup se sume al uso
@@ -1049,3 +1082,48 @@ memoria ~8.9 GiB libres, `config.toml` con `modo_remediacion="diagnostico"`,
   validar Modo 2.
 - No cruza el 90% de disco real en ningún momento (§9.2.1 calcula el
   filler antes de crearlo y aborta si superaría 4 GiB).
+
+### 9.4 Intento real en el VPS (2026-09-01) — Paso 0 y Fase A completos, Fase B parcial, Fase C no arrancada
+
+Ejecutado con punto de control explícito de MauItu: solo §9.2.0 + Fase A +
+Fase B dry-run, sin activar `auto_fix`. Preflight (rollback, timer apt,
+línea base) en verde antes de empezar.
+
+**Completo y verificado:** Paso 0 (deploy por `git archive HEAD`,
+migración real de las dos claves, validación real con `load_config()`,
+sudoers/unidades instaladas, `sudo -n -l` confirmado como usuario
+`doctorjk` real). Fase A (unidades sintéticas registradas, filler
+calculado sin crear, stub de LLM y `memhog.py` creados y validados por
+hash). B1 (kill -9 real a `doctorjk-test-svc`, detector confirmó en 2
+ciclos, pipeline completo corrió con el stub, informe con `[DRY-RUN]`,
+sin restart real).
+
+**Se paró antes de B2**, por dos hallazgos en vivo, no anticipados en el
+borrador:
+
+1. `disco_pct = 5` disparó `disk_full` también en `/boot`, `/boot/efi` y
+   `/sys/firmware/efi/efivars` (monitor.py evalúa todos los mount points,
+   no solo `/`) — inofensivo pero no planeado. Ver nota en §9.2.1; queda
+   como decisión pendiente antes de reintentar.
+2. El backup de config.toml se tomaba ANTES de la migración de
+   install.sh (bug real, ya corregido en §9.2.0 arriba): al restaurarlo
+   para parar de forma segura, `doctorjk.service` entró en crash-loop real
+   (`ConfigError`, 7 reinicios) por faltarle las dos claves nuevas.
+   Corregido en el momento agregándolas a mano con su default fail-closed
+   (mismo resultado que hubiera dado el backup correcto), verificado
+   estable, y corregido en el protocolo para que no vuelva a pasar.
+
+**Cleanup y salud final, verificados:** las 3 unidades de prueba
+detenidas/removidas, los 4 informes espurios (3× `disk_full` de los mounts
+de sistema + 1× `service_failed` de B1) borrados, temporales de `/tmp`
+borrados, `config.toml.bak-gate44` (el backup con el bug) borrado. Estado
+final idéntico a la línea base de §9.1: los 6 servicios activos, carga
+0.01, disco 3%, memoria 8.9 GiB libres, sin swap, `config.toml` en
+`modo_remediacion="diagnostico"`/`auto_fix=false`/`dry_run=true` con las
+dos claves migradas en su default, sin unidades `doctorjk-test-*`
+cargadas, sin marcadores en `/run`. Ningún incidente real se ejecutó,
+ninguna llamada a Cloudflare, ningún `push`/`merge`.
+
+**Pendiente antes de reintentar:** decidir el hallazgo 1 de arriba, luego
+retomar desde B2 (los 4 dry-runs directos no llegaron a correrse) con Fase
+A repetida desde cero (nada quedó de pie para reusar).
