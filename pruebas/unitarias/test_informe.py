@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from doctorjk.informe import (
-    SUFIJO_EVIDENCIA,
+    EVIDENCE_SUFFIX,
     render_report,
     rotate_reports,
     save_and_rotate,
@@ -94,7 +94,7 @@ def _crear_par(directorio: Path, indice: int) -> tuple[Path, Path]:
     momento = AHORA + timedelta(minutes=indice)
     incidente = _incidente(momento, sufijo=str(indice))
     informe = write_report(_diagnostico(), incidente, directorio, momento)
-    evidencia = directorio / f"{informe.stem}{SUFIJO_EVIDENCIA}"
+    evidencia = directorio / f"{informe.stem}{EVIDENCE_SUFFIX}"
     evidencia.write_text("evidencia cruda", encoding="utf-8")
     return informe, evidencia
 
