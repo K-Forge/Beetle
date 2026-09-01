@@ -13,6 +13,7 @@ import requests
 
 from doctorjk.llm import (
     BACKOFF_SECONDS,
+    MAX_COMPLETION_TOKENS,
     LLMConfig,
     build_fallback,
     diagnose,
@@ -99,6 +100,29 @@ def test_solo_se_envia_la_evidencia_sanitizada(evidencia, config):
     mensajes = sesion.llamadas[0]["json"]["messages"]
     assert mensajes[1]["content"] == evidencia.text
     assert sesion.llamadas[0]["timeout"] == 30.0
+
+
+def test_la_peticion_fija_max_tokens(evidencia, config):
+    # Verificado contra Cloudflare real: sin esto, gpt-oss-120b agota el
+    # default del proveedor (256) en su razonamiento oculto y nunca llega a
+    # 'content' -- cada incidente real caía al fallback en silencio.
+    sesion = SesionFalsa(_respuesta_ok())
+    _, dormir = _esperas()
+
+    diagnose(evidencia, "prompt", config, sesion, sleep=dormir)
+
+    assert sesion.llamadas[0]["json"]["max_tokens"] == MAX_COMPLETION_TOKENS
+
+
+def test_respuesta_truncada_por_longitud_cae_al_fallback(evidencia, config):
+    # Reproduce el defecto real encontrado en Gate 2.3 punto 8: 200 pero
+    # finish_reason="length" y content=None -- tan inservible como un 500.
+    sesion = SesionFalsa(RespuestaFalsa(200, {"choices": [{"finish_reason": "length", "message": {"content": None}}]}))
+    _, dormir = _esperas()
+
+    resultado = diagnose(evidencia, "prompt", config, sesion, sleep=dormir)
+
+    assert resultado.from_fallback is True
 
 
 def test_deepseek_solo_cambia_configuracion(evidencia):

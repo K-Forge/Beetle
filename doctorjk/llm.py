@@ -30,6 +30,16 @@ BACKOFF_SECONDS: tuple[float, ...] = (1.0, 2.0, 4.0)
 
 DEFAULT_TIMEOUT_S = 30.0
 
+# gpt-oss-120b es un modelo de razonamiento: antes de escribir la respuesta
+# final gasta tokens en una cadena de razonamiento oculta que cuenta contra el
+# mismo presupuesto de salida. Verificado en llamada real contra Cloudflare
+# (plan-finalizacion-mvp.md Gate 2.3, punto 8): sin max_tokens, el proveedor
+# usa un default de 256, el modelo agota ese presupuesto razonando y nunca
+# llega a 'content' -- finish_reason="length", content=None, cada incidente
+# real caía al fallback en silencio. 4096 dejó margen holgado sobre los 1712
+# tokens de salida que consumió un diagnóstico real de una sola sección.
+MAX_COMPLETION_TOKENS = 4096
+
 # Códigos que justifican reintentar: el problema es del otro lado y puede pasar.
 _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 
@@ -198,6 +208,7 @@ def diagnose(
             {"role": "system", "content": prompt},
             {"role": "user", "content": evidence.text},
         ],
+        "max_tokens": MAX_COMPLETION_TOKENS,
     }
     headers = {
         "Authorization": f"Bearer {config.api_key}",
