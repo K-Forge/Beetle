@@ -3,57 +3,57 @@
 #
 # CONSERVA los informes y la evidencia de /var/lib/doctorjk: son el historial
 # de incidentes del servidor y pueden hacer falta despues de desinstalar. Para
-# borrarlos hay que pedirlo explicitamente con --borrar-datos.
+# borrarlos hay que pedirlo explicitamente con --delete-data.
 #
-# Uso:  sudo ./instalador/desinstalar.sh [--borrar-datos]
+# Uso:  sudo ./instalador/desinstalar.sh [--delete-data]
 
 set -euo pipefail
 
-PREFIJO="/opt/doctorjk"
+PREFIX="/opt/doctorjk"
 CONFIG_DIR="/etc/doctorjk"
-DATOS_DIR="/var/lib/doctorjk"
-USUARIO="doctorjk"
-UNIDADES=(doctorjk-trigger.service doctorjk.service)
+DATA_DIR="/var/lib/doctorjk"
+SERVICE_USER="doctorjk"
+UNITS=(doctorjk-trigger.service doctorjk.service)
 
-BORRAR_DATOS=false
-[[ "${1:-}" == "--borrar-datos" ]] && BORRAR_DATOS=true
+DELETE_DATA=false
+[[ "${1:-}" == "--delete-data" ]] && DELETE_DATA=true
 
 info() { printf '  %s\n' "$*"; }
-paso() { printf '\n== %s\n' "$*"; }
+step() { printf '\n== %s\n' "$*"; }
 
 [[ $EUID -eq 0 ]] || { echo "ERROR: ejecutar como root (sudo)" >&2; exit 1; }
 
-paso "Deteniendo servicios"
+step "Deteniendo servicios"
 # El trigger primero: depende del agente y no debe quedar escribiendo a un FIFO
 # cuyo dueno ya murio.
-for unidad in "${UNIDADES[@]}"; do
-  if systemctl list-unit-files "$unidad" >/dev/null 2>&1; then
-    systemctl disable --now --quiet "$unidad" 2>/dev/null || true
-    info "$unidad detenida"
+for unit in "${UNITS[@]}"; do
+  if systemctl list-unit-files "$unit" >/dev/null 2>&1; then
+    systemctl disable --now --quiet "$unit" 2>/dev/null || true
+    info "$unit detenida"
   fi
-  rm -f "/etc/systemd/system/$unidad"
+  rm -f "/etc/systemd/system/$unit"
 done
 systemctl daemon-reload
 systemctl reset-failed 2>/dev/null || true
 
-paso "Quitando el codigo"
-rm -rf "$PREFIJO"
-info "$PREFIJO eliminado"
+step "Quitando el codigo"
+rm -rf "$PREFIX"
+info "$PREFIX eliminado"
 
-paso "Configuracion y datos"
-if $BORRAR_DATOS; then
-  rm -rf "$CONFIG_DIR" "$DATOS_DIR"
+step "Configuracion y datos"
+if $DELETE_DATA; then
+  rm -rf "$CONFIG_DIR" "$DATA_DIR"
   info "configuracion, informes y evidencia ELIMINADOS"
 else
-  info "se conservan $CONFIG_DIR y $DATOS_DIR"
-  info "para borrarlos: sudo $0 --borrar-datos"
+  info "se conservan $CONFIG_DIR y $DATA_DIR"
+  info "para borrarlos: sudo $0 --delete-data"
 fi
 
 # El usuario se conserva si quedaron datos suyos: borrarlo dejaria los informes
 # con un UID huerfano, ilegibles por nombre.
-if $BORRAR_DATOS && id "$USUARIO" >/dev/null 2>&1; then
-  userdel "$USUARIO" 2>/dev/null || true
-  info "usuario $USUARIO eliminado"
+if $DELETE_DATA && id "$SERVICE_USER" >/dev/null 2>&1; then
+  userdel "$SERVICE_USER" 2>/dev/null || true
+  info "usuario $SERVICE_USER eliminado"
 fi
 
 printf '\n== Desinstalacion completa\n\n'
