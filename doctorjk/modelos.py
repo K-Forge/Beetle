@@ -232,6 +232,10 @@ class RemediationOutcome(str, Enum):
     FAILED = "failed"  # el script corrió pero no verificó resuelto: escalar
     NOT_MAPPED = "not_mapped"  # el tipo de incidente no tiene script (#200)
     NOT_ENABLED = "not_enabled"  # modo_remediacion != "scripts"
+    # El script corrió en dry-run (config.dry_run=true): un exit 0 ahí no
+    # verificó nada real, así que nunca se reporta como RESOLVED (hallazgo
+    # de auditoría #5, 2026-09-01 -- "falso éxito en dry-run").
+    DRY_RUN = "dry_run"
 
 
 @dataclass(frozen=True)
