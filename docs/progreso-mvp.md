@@ -497,7 +497,12 @@ corren la migración real contra un fixture con el esquema exacto de Gate 3
 (`pruebas/unitarias/test_instalador.py`): agrega ambas claves una sola vez,
 no las duplica en una segunda corrida, y no toca una config que ya las
 tiene. Este Paso 0 ya no necesita ningún paso manual adicional para esto
--- basta con que `install.sh` sea el de esta rama.
+-- basta con que `install.sh` sea el de esta rama. Además, `install.sh`
+ahora valida el `config.toml` resultante con el `load_config()` real
+(venv recién instalado) antes de tocar sudoers o reiniciar unidades: si la
+migración hubiera producido algo inválido -- o el archivo ya viniera mal
+por otra razón --, el Paso 0 aborta ahí, con el agente anterior (si lo
+había) sin tocar, en vez de descubrirlo recién en el primer restart.
 
 **Rollback si algo de esto falla (corrección del hallazgo 6, precisada por
 el hallazgo (e), y corregida de nuevo acá — hallazgo propio, ver nota
@@ -742,32 +747,70 @@ no muta nada, y se limpia antes de pasar al siguiente (excepto
   matarla → `sudo -n /opt/doctorjk/scripts-fix/fix_servicio.sh
   doctorjk-test-svc.service` → confirmar `[DRY-RUN]` y que sigue `failed`.
   Sin cleanup acá tampoco (misma razón que B1).
-- `fix_disco.sh`: `fallocate -l "$(cat /tmp/doctorjk-filler-kb)K"
-  /var/log/doctorjk-test.log.1.gz && sudo touch -d '10 days ago'
-  /var/log/doctorjk-test.log.1.gz` → `sudo -n
+- `fix_disco.sh`: (**corrección del hallazgo (2): `fallocate` sobre
+  `/var/log` exige root, faltaba el `sudo`**) `sudo fallocate -l
+  "$(cat /tmp/doctorjk-filler-kb)K" /var/log/doctorjk-test.log.1.gz &&
+  sudo touch -d '10 days ago' /var/log/doctorjk-test.log.1.gz` (tope de 4
+  GiB y cleanup sin cambios, ya calculados en §9.2.1) → `sudo -n
   /opt/doctorjk/scripts-fix/fix_disco.sh /` (**corrección del hallazgo
   (c):** el script exige `$1` = punto de montaje; sin argumento falla con
   "uso: fix_disco.sh <punto-de-montaje>", ni siquiera llega a mirar
   `dry_run`) → confirmar `[DRY-RUN]` y que el archivo sigue ahí → cleanup:
   `sudo rm -f /var/log/doctorjk-test.log.1.gz`.
-- `fix_puerto.sh`: recrear el ocupante (**corrección del hallazgo (b)**,
-  ver tabla arriba -- nunca `systemctl start` a secas):
-  `sudo systemd-run --unit=doctorjk-test-occupier --collect python3 -m
-  http.server 18080 --bind 127.0.0.1` → `sudo -n
-  /opt/doctorjk/scripts-fix/fix_puerto.sh 18080` → confirmar `[DRY-RUN]` y
-  que el ocupante sigue escuchando (no `doctorjk-test-owner`) → cleanup:
-  `sudo systemctl stop doctorjk-test-occupier` (la recolecta sola por el
-  `--collect`).
+- `fix_puerto.sh`: **corrección del hallazgo (1) -- orden exacto, porque
+  `doctorjk-test-owner` sigue escuchando en 18080 desde la Fase A y el
+  ocupante no puede enlazar el mismo puerto:**
+  1. `sudo systemctl stop doctorjk-test-owner`.
+  2. Recrear el ocupante (corrección del hallazgo (b), ver tabla de
+     §9.2.1 -- nunca `systemctl start` a secas): `sudo systemd-run
+     --unit=doctorjk-test-occupier --collect python3 -m http.server
+     18080 --bind 127.0.0.1`.
+  3. `sudo -n /opt/doctorjk/scripts-fix/fix_puerto.sh 18080` → confirmar
+     `[DRY-RUN]` y que el ocupante sigue escuchando (no
+     `doctorjk-test-owner`).
+  4. Cleanup: `sudo systemctl stop doctorjk-test-occupier` (la recolecta
+     sola por el `--collect`), luego `sudo systemctl restart
+     doctorjk-test-owner`.
+  5. Verificar salud antes de seguir con el siguiente sub-paso de B2:
+     `ss -tln` muestra 18080 con el PID de `doctorjk-test-owner` — el
+     puerto no puede quedar sin dueño entrando a los sub-pasos de disco o
+     memoria (mismo motivo que en §9.2.1: `port_down` confirmado con
+     `auto_fix` todavía en `false` es inofensivo, pero dejarlo así sería
+     un descuido, no una decisión).
 - `fix_memoria.sh`: `sudo systemd-run --unit=doctorjk-test-memhog
   --property=MemoryMax=1200M --property=MemorySwapMax=0 --collect
-  python3 /tmp/doctorjk-deploy/memhog.py` (script de una sola asignación,
-  ver más abajo) → `sudo -n /opt/doctorjk/scripts-fix/fix_memoria.sh` →
-  confirmar `[DRY-RUN]` y que la memoria disponible sigue baja → cleanup:
-  `sudo systemctl stop doctorjk-test-memhog`, `sudo rm -f
-  /run/doctorjk-test-memhog.marker`.
+  python3 /tmp/doctorjk-memhog.py` (creado y validado ANTES de esta línea,
+  ver más abajo -- corrección del hallazgo 3) → `sudo -n
+  /opt/doctorjk/scripts-fix/fix_memoria.sh` → confirmar `[DRY-RUN]` y que
+  la memoria disponible sigue baja → cleanup: `sudo systemctl stop
+  doctorjk-test-memhog`, `sudo rm -f /run/doctorjk-test-memhog.marker`.
 
-`memhog.py` (transferido junto con el resto en el Paso 0, o creado igual
-que el stub de LLM con un heredoc):
+**`/tmp/doctorjk-memhog.py` (corrección del hallazgo 3):** no es un
+archivo del repo -- `git archive HEAD` (Paso 0) solo transfiere lo
+comiteado, y esto nunca se comiteó. Documentarlo como si ya estuviera en
+`/tmp/doctorjk-deploy/` habría sido una referencia a un archivo
+inexistente. Igual que el stub de LLM (§9.2.2), se crea explícitamente en
+el VPS con un heredoc, ANTES de la primera vez que un `systemd-run` lo
+use, y se valida por hash que llegó completo (un corte a mitad de la
+transferencia por SSH produciría un script que falla en runtime, no al
+crearlo):
+
+```bash
+tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
+  cat > /tmp/doctorjk-memhog.py <<'PYEOF'
+<contenido de abajo, sin indentar>
+PYEOF
+  echo 'fb4869cac0160ed3a862cc21be4ab78fa7b75d77d136fdf25b043fc016227c0e  /tmp/doctorjk-memhog.py' \
+    | sha256sum -c - \
+    || { echo 'memhog.py no coincide con el esperado -- no usar' >&2; exit 1; }
+  python3 -m py_compile /tmp/doctorjk-memhog.py \
+    || { echo 'memhog.py no compila' >&2; exit 1; }
+"
+```
+
+Contenido de `/tmp/doctorjk-memhog.py` (el hash de arriba es de este texto
+exacto; si se edita, recalcular con `sha256sum` antes de actualizar el
+comando):
 
 ```python
 #!/usr/bin/env python3
@@ -788,11 +831,11 @@ else:
     time.sleep(1_000_000)
 ```
 
-Al cerrar la Fase B, `doctorjk-test-disco`/`-occupier`/`-memhog` quedan
-limpios (cada bullet de B2 ya se encargó), pero **`doctorjk-test-svc`
-sigue `failed`** a propósito desde B1 -- y `doctorjk-test-owner` nunca se
-tocó, sigue corriendo desde la Fase A. Antes de armar `auto_fix=true` hay
-que dejar los cuatro recursos sanos, no solo tres:
+Al cerrar la Fase B, el filler de disco, `doctorjk-test-occupier` y
+`doctorjk-test-memhog` quedan limpios (cada bullet de B2 ya se encargó,
+incluido volver a dejar `doctorjk-test-owner` escuchando al final de su
+propio sub-paso). Solo **`doctorjk-test-svc` sigue `failed`** a propósito
+desde B1. Antes de armar `auto_fix=true` falta dejarla sana también:
 
 **Corrección del segundo bloqueante -- por qué esto no puede saltarse:**
 `doctorjk-test-svc` sigue en `servicios_vigilados`. Si se activara
@@ -809,8 +852,9 @@ tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
 "
 ```
 
-(`doctorjk-test-owner` no necesita nada acá: nunca se detuvo, sigue
-escuchando en 18080 desde la Fase A.)
+(`doctorjk-test-owner` no necesita nada acá: el sub-paso de `fix_puerto.sh`
+en B2 ya la dejó corriendo de nuevo al cerrar, como su propio paso 4 y 5
+-- no queda pendiente de esta transición.)
 
 #### 9.2.4 Fase C — 4 escenarios reales, secuenciales (`dry_run=false`, `auto_fix=true`)
 
