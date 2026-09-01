@@ -26,16 +26,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Sequence
 
+import requests
+
 from doctorjk import informe, llm, monitor, recolector, sanitizador
-from doctorjk.config import AppConfig
+from doctorjk.config import AppConfig, ConfigError, load_config
 from doctorjk.detector import Detector
-from doctorjk.modelos import Incident, SystemSnapshot
+from doctorjk.modelos import Incident, IncidentState, SignalType, SystemSnapshot
 from doctorjk.pipeline import PipelineDeps, handle_incident
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_FIFO_PATH = "/run/doctorjk/trigger.fifo"
-DEFAULT_INTERVAL_S = 30.0
+# Rutas que deja instalador/install.sh; --config y --prompt las sobrescriben
+# para pruebas o instalaciones no estándar.
+DEFAULT_CONFIG_PATH = "/etc/doctorjk/config.toml"
+DEFAULT_PROMPT_PATH = "/opt/doctorjk/prompts/diagnosticador.md"
+# Tope de incidentes esperando su ventana +1 minuto (Gate 2.2): protege la
+# memoria si journalctl o systemctl se degradan y el agente confirma
+# incidentes más rápido de lo que puede procesarlos.
+MAX_PENDING_INCIDENTS = 50
 
 
 # ------------------------------------------------------------------- CLI
@@ -62,10 +71,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="toma una sola muestra y termina; no abre el FIFO ni entra en loop",
     )
     parser.add_argument(
+        "--config",
+        default=os.environ.get("DOCTORJK_CONFIG_PATH", DEFAULT_CONFIG_PATH),
+        help=f"ruta de config.toml (default: {DEFAULT_CONFIG_PATH})",
+    )
+    parser.add_argument(
+        "--prompt",
+        default=os.environ.get("DOCTORJK_PROMPT_PATH", DEFAULT_PROMPT_PATH),
+        help=f"ruta del prompt de diagnóstico (default: {DEFAULT_PROMPT_PATH})",
+    )
+    parser.add_argument(
         "--interval",
         type=float,
-        default=DEFAULT_INTERVAL_S,
-        help=f"segundos entre ciclos de polling (default: {DEFAULT_INTERVAL_S})",
+        default=None,
+        help="segundos entre ciclos de polling; sin esto se usa intervalo_monitor_s de config.toml",
     )
     parser.add_argument(
         "--fifo-path",
@@ -85,7 +104,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "--auto-fix y --dry-run son incompatibles: uno ejecuta correcciones, "
             "el otro las simula sin tocar el servidor"
         )
-    if args.interval <= 0:
+    if args.interval is not None and args.interval <= 0:
         parser.error("--interval debe ser mayor que 0")
 
     return args
@@ -101,11 +120,20 @@ class AppContext:
     once: bool
     take_snapshot: Callable[[], SystemSnapshot]
     on_snapshot: Callable[[SystemSnapshot], None]
+    # Gate 2.2: cuánto esperar hasta el próximo evento (tick de polling o
+    # incidente pendiente que vence), dado el reloj actual. Con default
+    # constante para no romper construcciones directas de AppContext en
+    # tests que no ejercitan la cola de pendientes.
+    next_wakeup_delay: Callable[[datetime], float] = lambda now: 30.0
+    # Cierre ordenado de recursos que build_app() haya abierto (la sesión
+    # HTTP del cliente LLM). No-op por default por la misma razón de arriba.
+    close: Callable[[], None] = lambda: None
 
 
 def log_snapshot(snapshot: SystemSnapshot) -> None:
-    """Callback por defecto para el bloque A3: registra un resumen legible.
-    El detector (Fase 2) reemplaza esto por la máquina de estados real."""
+    """Callback de solo-registro de Gate A, conservado para --once sin
+    configuración y como referencia de qué trae un SystemSnapshot. El
+    callback real que usa build_app() está en build_incident_pipeline()."""
     memoria_disponible = (
         f"{snapshot.memory.available_mb} MB" if snapshot.memory else "desconocida"
     )
@@ -116,6 +144,63 @@ def log_snapshot(snapshot: SystemSnapshot) -> None:
         len(snapshot.disks),
         memoria_disponible,
     )
+
+
+# --------------------------------------------------- ventana +1 minuto (Gate 2.2)
+
+
+@dataclass(frozen=True)
+class PendingIncident:
+    """Un incidente ya confirmado, esperando a que pase la ventana +1 minuto
+    de recolector.WINDOW_AFTER antes de recolectar evidencia. No se puede
+    pedirle a journalctl `--until <futuro>` y esperar que invente logs que
+    todavía no existen (defecto 8): hay que esperar de verdad a que ese
+    minuto transcurra."""
+
+    incident: Incident
+    collect_after: datetime
+
+
+def queue_pending_incident(
+    queue: list[PendingIncident], incident: Incident, collect_after: datetime
+) -> None:
+    """Encola un incidente recién confirmado. Acotada: si journalctl o
+    systemctl se degradan y el detector confirma incidentes más rápido de lo
+    que el agente puede procesarlos, se descarta el más viejo en vez de
+    crecer sin límite (protocolo del plan, punto 4: "limitar la cola para no
+    agotar memoria")."""
+    if len(queue) >= MAX_PENDING_INCIDENTS:
+        descartado = queue.pop(0)
+        logger.warning(
+            "cola de incidentes pendientes llena (%d); se descarta sin evidencia: %s",
+            MAX_PENDING_INCIDENTS,
+            descartado.incident.incident_id,
+        )
+    queue.append(PendingIncident(incident=incident, collect_after=collect_after))
+
+
+def pop_due_incidents(queue: list[PendingIncident], now: datetime) -> list[PendingIncident]:
+    """Extrae de la cola, en el orden en que vencieron, los incidentes cuya
+    ventana +1 minuto ya pasó. Los que todavía no vencen quedan en la cola
+    para el próximo ciclo. Si el reloj saltó hacia adelante (reinicio del
+    servicio, ajuste de hora), igual se procesan con lo que journalctl tenga
+    disponible en ese momento -- no se inventa el minuto faltante."""
+    debidos = [pendiente for pendiente in queue if pendiente.collect_after <= now]
+    for pendiente in debidos:
+        queue.remove(pendiente)
+    debidos.sort(key=lambda pendiente: pendiente.collect_after)
+    return debidos
+
+
+def seconds_until_next_event(queue: list[PendingIncident], interval_s: float, now: datetime) -> float:
+    """Cuánto falta hasta que corresponda despertar: el próximo tick de
+    polling normal, o el incidente pendiente más próximo, lo que ocurra
+    antes. Nunca negativo: un incidente ya vencido despierta de inmediato."""
+    if not queue:
+        return interval_s
+    proximo_vencimiento = min(pendiente.collect_after for pendiente in queue)
+    restante = (proximo_vencimiento - now).total_seconds()
+    return max(0.0, min(interval_s, restante))
 
 
 def build_pipeline_deps(config: AppConfig, session: object) -> PipelineDeps:
@@ -136,7 +221,10 @@ def build_pipeline_deps(config: AppConfig, session: object) -> PipelineDeps:
 
     return PipelineDeps(
         collect_evidence=lambda incident, directorio, ahora: recolector.collect_evidence(
-            incident, reports_dir=directorio, now=ahora
+            incident,
+            reports_dir=directorio,
+            now=ahora,
+            command_timeout_s=config.command_timeout_s,
         ),
         write_raw_evidence=recolector.write_raw_evidence,
         sanitize_evidence=sanitizador.sanitize_evidence,
@@ -154,21 +242,144 @@ def on_incident(
     deps: PipelineDeps,
     now: datetime,
 ) -> None:
-    """Puente entre el detector y el pipeline. Nunca deja escapar una excepción:
-    un incidente que falla al procesarse no debe detener la vigilancia."""
-    try:
-        handle_incident(incident, prompt, reports_dir, now, deps)
-    except Exception:  # noqa: BLE001 -- frontera del bucle: se registra y se sigue
-        logger.exception("fallo procesando el incidente %s", incident.incident_id)
+    """Puente entre el detector y el pipeline.
+
+    No lleva try/except propio (defecto 10: nada de `except Exception` a
+    secas): `handle_incident()` ya garantiza no propagar los fallos de E/S
+    esperables de cada etapa (recolección, evidencia cruda, informe). Si algo
+    más escapa de acá es un bug real, no una falla operativa esperada, y debe
+    hacer ruido en vez de esconderse.
+    """
+    handle_incident(incident, prompt, reports_dir, now, deps)
+
+
+def _persistence_cycles_by_type(config: AppConfig) -> dict[SignalType, int]:
+    """Arma el mapeo SignalType -> ciclos que exige el Detector (Gate 1.3):
+    cada tipo usa el parámetro de config.toml que le corresponde, no un
+    número global único."""
+    return {
+        SignalType.SERVICE_FAILED: config.service_cycles,
+        SignalType.DISK_FULL: config.persistence_cycles,
+        SignalType.MEMORY_LOW: config.persistence_cycles,
+        SignalType.PORT_DOWN: config.port_cycles,
+        SignalType.PORT_OCCUPIED: config.port_cycles,
+    }
+
+
+def _monitored_service_names(config: AppConfig) -> frozenset[str]:
+    """Unión de `servicios_vigilados` y los servicios dueños de cada puerto
+    de `puertos_vigilados`: ambos necesitan su estado consultado por
+    query_service_states() para que normalize_snapshot() pueda emitir
+    service_failed y port_occupied correctamente."""
+    return frozenset(config.monitored_services) | frozenset(
+        puerto.service for puerto in config.monitored_ports
+    )
+
+
+def build_incident_pipeline(
+    config: AppConfig,
+    prompt: str,
+    session: object,
+    interval_s: float | None = None,
+    now_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+) -> tuple[Callable[[SystemSnapshot], None], Callable[[datetime], float]]:
+    """Arma el Detector de larga vida, la cola de incidentes pendientes de la
+    ventana +1 minuto (Gate 2.2) y las dos piezas que el loop de main()
+    necesita: el callback real de snapshot y cuánto esperar hasta el próximo
+    evento. Es el único lugar donde vive el estado del Modo 1 en ejecución.
+
+    `interval_s` es el intervalo de polling EFECTIVO (config.toml salvo
+    override de --interval); si se usara siempre config.monitor_interval_s
+    acá adentro, un --interval de prueba más corto no tendría ningún efecto
+    sobre cuánto espera next_wakeup_delay(), solo sobre AppContext.interval_s
+    -- que run() ya no usa directamente. Default a config.monitor_interval_s
+    para quien llame esta función sin pasar un override.
+
+    `now_fn` es el reloj de pared que decide si un incidente pendiente ya
+    venció -- separado de `snapshot.captured_at` porque la ventana +1 minuto
+    es tiempo real transcurrido, no un campo del snapshot. Inyectable para
+    poder probar la cola sin depender de time.sleep() de verdad.
+    """
+    interval_efectivo = interval_s if interval_s is not None else config.monitor_interval_s
+    detector = Detector(
+        persistence_cycles=_persistence_cycles_by_type(config),
+        cooldown_cycles=config.cooldown_cycles,
+    )
+    deps = build_pipeline_deps(config, session)
+    pendientes: list[PendingIncident] = []
+
+    def procesar_snapshot(snapshot: SystemSnapshot) -> None:
+        señales = monitor.normalize_snapshot(
+            snapshot,
+            disk_pct_threshold=config.disk_pct_threshold,
+            memory_available_mb_threshold=config.memory_available_mb_threshold,
+            monitored_ports=config.monitored_ports,
+        )
+        for transicion in detector.evaluate(señales, snapshot.captured_at):
+            if transicion.new_state is IncidentState.INCIDENT and transicion.incident is not None:
+                vence = snapshot.captured_at + recolector.WINDOW_AFTER
+                queue_pending_incident(pendientes, transicion.incident, vence)
+                logger.info(
+                    "incidente confirmado, evidencia programada para %s: clave=%s",
+                    vence.isoformat(),
+                    transicion.key,
+                )
+            elif transicion.new_state is IncidentState.RESOLVED:
+                # Resolución: se registra, no se vuelve a invocar al LLM. El
+                # informe del incidente original ya cubrió el diagnóstico.
+                logger.info(
+                    "incidente resuelto sin diagnóstico adicional: clave=%s tipo=%s",
+                    transicion.key,
+                    transicion.signal_type.value,
+                )
+
+        ahora = now_fn()
+        for pendiente in pop_due_incidents(pendientes, ahora):
+            on_incident(pendiente.incident, prompt, config.reports_dir, deps, ahora)
+
+    def proxima_espera(now: datetime) -> float:
+        return seconds_until_next_event(pendientes, interval_efectivo, now)
+
+    return procesar_snapshot, proxima_espera
 
 
 def build_app(args: argparse.Namespace) -> AppContext:
+    """Composition root del Modo 1: carga configuración y prompt una sola
+    vez, arma la sesión HTTP real y cablea el pipeline completo. Antes de
+    Gate 2 esto dejaba on_snapshot=log_snapshot y nada de lo cargado se
+    usaba (defecto 1); ahora es el único lugar donde el ejecutable conoce
+    módulos concretos, igual que build_pipeline_deps() para el pipeline.
+    """
+    config_path = Path(args.config)
+    try:
+        config = load_config(config_path)
+    except ConfigError as error:
+        raise SystemExit(f"configuración inválida en {config_path}: {error}") from error
+
+    prompt_path = Path(args.prompt)
+    try:
+        prompt = prompt_path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise SystemExit(f"no se pudo leer el prompt en {prompt_path}: {error}") from error
+
+    interval_s = args.interval if args.interval is not None else config.monitor_interval_s
+
+    session = requests.Session()
+    on_snapshot, proxima_espera = build_incident_pipeline(
+        config, prompt, session, interval_s=interval_s
+    )
+    monitored_service_names = _monitored_service_names(config)
+
     return AppContext(
-        interval_s=args.interval,
+        interval_s=interval_s,
         fifo_path=Path(args.fifo_path),
         once=args.once,
-        take_snapshot=monitor.take_snapshot,
-        on_snapshot=log_snapshot,
+        take_snapshot=lambda: monitor.take_snapshot(
+            timeout_s=config.command_timeout_s, monitored_services=monitored_service_names
+        ),
+        on_snapshot=on_snapshot,
+        next_wakeup_delay=proxima_espera,
+        close=session.close,
     )
 
 
@@ -239,7 +450,10 @@ def wait_for_next_cycle(fifo_fd: int | None, interval_s: float) -> str:
 
 def run(context: AppContext) -> None:
     if context.once:
-        context.on_snapshot(context.take_snapshot())
+        try:
+            context.on_snapshot(context.take_snapshot())
+        finally:
+            context.close()
         return
 
     fifo_fd = None
@@ -256,14 +470,19 @@ def run(context: AppContext) -> None:
 
     try:
         while not detener.is_set():
-            motivo = wait_for_next_cycle(fifo_fd, context.interval_s)
+            # Gate 2.2: la espera no es siempre context.interval_s -- se
+            # acorta si hay un incidente pendiente cuya ventana +1 minuto
+            # vence antes del próximo tick de polling.
+            espera_s = context.next_wakeup_delay(datetime.now(timezone.utc))
+            motivo = wait_for_next_cycle(fifo_fd, espera_s)
             if detener.is_set():
                 break
-            logger.debug("ciclo disparado por: %s", motivo)
+            logger.debug("ciclo disparado por: %s (espera=%.1fs)", motivo, espera_s)
             context.on_snapshot(context.take_snapshot())
     finally:
         if fifo_fd is not None:
             os.close(fifo_fd)
+        context.close()
 
 
 def main(argv: Sequence[str] | None = None) -> int:
