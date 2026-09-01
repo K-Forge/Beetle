@@ -9,12 +9,20 @@ import pytest
 
 from doctorjk.informe import (
     EVIDENCE_SUFFIX,
+    append_remediation,
     render_report,
     rotate_reports,
     save_and_rotate,
     write_report,
 )
-from doctorjk.modelos import Diagnosis, Incident, IncidentState, SignalType
+from doctorjk.modelos import (
+    Diagnosis,
+    Incident,
+    IncidentState,
+    RemediationOutcome,
+    RemediationResult,
+    SignalType,
+)
 
 AHORA = datetime(2026, 8, 26, 4, 15, 0, tzinfo=timezone.utc)
 
@@ -159,3 +167,68 @@ def test_si_no_se_puede_escribir_el_diagnostico_queda_en_el_log(tmp_path: Path, 
     assert resultado is None
     # El diagnóstico no se pierde aunque el disco falle.
     assert "texto valioso" in caplog.text
+
+
+# ------------------------------------------------- corrección automática (Modo 2)
+
+
+def _resultado_remediacion(
+    outcome: RemediationOutcome, stdout: str = "", stderr: str = "", exit_code: int | None = 0
+) -> RemediationResult:
+    return RemediationResult(
+        incident_id="inc-1",
+        signal_type=SignalType.SERVICE_FAILED,
+        script="fix_servicio.sh",
+        argv=("fix_servicio.sh", "postgresql@16-main.service"),
+        started_at=AHORA,
+        finished_at=AHORA + timedelta(seconds=3),
+        exit_code=exit_code,
+        stdout=stdout,
+        stderr=stderr,
+        outcome=outcome,
+    )
+
+
+def test_append_remediation_agrega_seccion_al_informe_existente(tmp_path: Path):
+    destino = write_report(_diagnostico(), _incidente(), tmp_path, AHORA)
+    resultado = _resultado_remediacion(RemediationOutcome.RESOLVED, stdout="servicio reiniciado")
+
+    append_remediation(destino, resultado)
+
+    contenido = destino.read_text(encoding="utf-8")
+    assert "## Corrección automática (Modo 2)" in contenido
+    assert "Resuelto automáticamente" in contenido
+    assert "servicio reiniciado" in contenido
+    assert "Se cayó PostgreSQL" in contenido  # el diagnóstico original sigue ahí
+
+
+def test_append_remediation_marca_fallo_para_escalar(tmp_path: Path):
+    destino = write_report(_diagnostico(), _incidente(), tmp_path, AHORA)
+    resultado = _resultado_remediacion(
+        RemediationOutcome.FAILED, stderr="no arrancó", exit_code=1
+    )
+
+    append_remediation(destino, resultado)
+
+    contenido = destino.read_text(encoding="utf-8")
+    assert "requiere revisión manual" in contenido
+    assert "no arrancó" in contenido
+
+
+@pytest.mark.parametrize("outcome", [RemediationOutcome.NOT_MAPPED, RemediationOutcome.NOT_ENABLED])
+def test_append_remediation_no_toca_el_informe_si_no_se_ejecuto_nada(tmp_path: Path, outcome):
+    destino = write_report(_diagnostico(), _incidente(), tmp_path, AHORA)
+    original = destino.read_text(encoding="utf-8")
+    resultado = _resultado_remediacion(outcome, exit_code=None)
+
+    append_remediation(destino, resultado)
+
+    assert destino.read_text(encoding="utf-8") == original
+
+
+def test_append_remediation_es_atomico_no_deja_temporales(tmp_path: Path):
+    destino = write_report(_diagnostico(), _incidente(), tmp_path, AHORA)
+    append_remediation(destino, _resultado_remediacion(RemediationOutcome.RESOLVED))
+
+    temporales = list(tmp_path.glob("*.tmp"))
+    assert temporales == []

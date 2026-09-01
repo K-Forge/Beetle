@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from doctorjk.modelos import Diagnosis, Incident
+from doctorjk.modelos import Diagnosis, Incident, RemediationOutcome, RemediationResult
 
 log = logging.getLogger("doctorjk.informe")
 
@@ -178,3 +178,57 @@ def save_and_rotate(
 
     rotate_reports(reports_dir, keep)
     return destination
+
+
+# ------------------------------------------------------- corrección (Modo 2)
+
+
+_OUTCOME_LABEL = {
+    RemediationOutcome.RESOLVED: "Resuelto automáticamente",
+    RemediationOutcome.FAILED: "Corrección fallida — requiere revisión manual",
+}
+
+
+def render_remediation_section(result: RemediationResult) -> str:
+    """Arma la sección de corrección automática que se anexa al informe
+    (tarea #201: "la misma información aparece en el informe generado").
+    Solo se llama para RESOLVED o FAILED -- NOT_MAPPED y NOT_ENABLED no
+    ejecutaron nada, no hay nada que auditar en el informe."""
+    lines = [
+        "",
+        "---",
+        "",
+        "## Corrección automática (Modo 2)",
+        "",
+        f"- **Resultado:** {_OUTCOME_LABEL[result.outcome]}",
+        f"- **Script:** `{result.script}`",
+        f"- **Código de salida:** {result.exit_code if result.exit_code is not None else 'sin ejecutar'}",
+        f"- **Inicio:** {result.started_at.isoformat()}",
+        f"- **Fin:** {result.finished_at.isoformat()}",
+    ]
+    if result.stdout:
+        lines += ["", "```", result.stdout.rstrip(), "```"]
+    if result.stderr:
+        lines += ["", "**stderr:**", "```", result.stderr.rstrip(), "```"]
+    return "\n".join(lines) + "\n"
+
+
+def append_remediation(report_path: Path, result: RemediationResult) -> None:
+    """Anexa la sección de corrección a un informe ya escrito, con la misma
+    escritura atómica que `write_report()` (temporal + rename): el informe
+    nunca queda a medio escribir, ni siquiera en este segundo paso.
+
+    No hace nada si `result` no ejecutó ningún script (NOT_MAPPED,
+    NOT_ENABLED): esos casos no tienen nada que auditar.
+    """
+    if result.outcome not in _OUTCOME_LABEL:
+        return
+    try:
+        current = report_path.read_text(encoding="utf-8")
+    except OSError as error:
+        log.error("no pude leer %s para anexar la corrección: %s", report_path, error)
+        return
+    try:
+        _write_atomic(report_path, current + render_remediation_section(result), 0o644)
+    except OSError as error:
+        log.error("no pude anexar la corrección a %s: %s", report_path, error)
