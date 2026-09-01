@@ -204,12 +204,51 @@ para calcular falsos positivos. `/opt/gate-b` se conserva sin borrar hasta
 que el resumen de arriba quede versionado (ya lo está, en este commit); la
 limpieza del directorio queda pendiente de aprobación explícita.
 
-### 7.2 Estado general
+### 7.2 Gate 3.2 — Modo 1 instalado y validado en el VPS real (2026-09-01)
 
-- No existen `/opt/doctorjk`, `/etc/doctorjk` ni `/var/lib/doctorjk`: el
-  Modo 1 todavía no se instaló de verdad en el VPS — es el siguiente paso
-  (Gate 3.2).
+Código desplegado por Tailscale (tar, sin usar el remoto de GitHub) a
+`~/mvp-integracion-modo-1` en `beetle-vps`, instalado con
+`instalador/install.sh` como servicio real.
+
+| Criterio | Resultado |
+|---|---|
+| Instalación limpia cronometrada | **14.3 s** (`/opt/doctorjk` recién borrado antes) |
+| Reinstalación idempotente | Confirmada: mismo hash de `config.toml` y `.env` antes/después, ambos servicios siguieron activos |
+| `systemd-analyze verify` | Limpio para las dos unidades propias (los únicos warnings son de `unified-monitoring-agent`, preexistente de Oracle) |
+| Consumo en reposo | 0,6 % CPU (agente) / 0,0 % (trigger), muy por debajo del 1 % |
+| Llamada real a Cloudflare | Confirmada varias veces, modelo `@cf/openai/gpt-oss-120b`, diagnósticos completos en español sin datos inventados |
+
+**Cuatro incidentes provocados de forma controlada y con restauración:**
+
+| Incidente | Cómo se provocó | Detectado | Informe | Recuperación |
+|---|---|---:|---:|---:|
+| `service_failed` (postgresql) | `kill -9` al proceso principal (no `systemctl stop`, que no genera evento) | Sí, 2 ciclos | Sí (cayó a fallback: ver abajo) | Sí, 2 ciclos sanos |
+| `port_down` (:5432) | Consecuencia del mismo kill | Sí, 2 ciclos | Sí, diagnóstico real | Sí |
+| `disk_full` (/) | `fallocate -l 128G`, 92% de uso; borrado ~90s después | Sí, 2 ciclos | Sí, diagnóstico real | Sí |
+| `port_occupied` (:80) | nginx detenido, un `python3 -m http.server 80` tomó el puerto | Sí, 2 ciclos | Sí, diagnóstico real | Sí |
+
+`memory_low` **no se provocó**: el VPS tiene 11 GiB sin swap y cruzar el
+umbral (512 MB disponibles) exige ocupar ~10,5 GiB en una máquina
+compartida sin margen de recuperación si algo sale mal. Se deja para Gate 5,
+con una herramienta acotada por cgroup (`systemd-run -p MemoryMax=...`) y
+ventana coordinada, no como prueba improvisada de Gate 3.
+
+**Defecto real encontrado y corregido en el camino:** el payload a Cloudflare
+no fijaba `max_tokens`. gpt-oss-120b es un modelo de razonamiento: sin ese
+límite, el proveedor usa un default de 256, el modelo agota ese presupuesto
+en razonamiento oculto y nunca llega a `content` (`finish_reason="length"`,
+`content=null`). Todo incidente real habría caído al fallback en silencio.
+Corregido con `MAX_COMPLETION_TOKENS=4096` (`doctorjk/llm.py`). Un segundo
+ajuste real: `llm_timeout_s` subió de 30 a 60 s porque con evidencia de
+tamaño real el modelo ocasionalmente tardó más de 30 s.
+
+**Estado dejado en el VPS:** los 4 servicios reales (nginx, postgresql,
+appcarga, cron) y `doctorjk`/`doctorjk-trigger` activos y sanos; disco al 3%;
+sin artefactos de prueba. `doctorjk.service` sigue corriendo — es, a partir
+de este momento, el inicio de la corrida de 24 h que pide el punto 12 de
+Gate 3.2. Falta contarla cuando pasen las 24 h (contar transiciones reales
+en el journal, no líneas de muestreo — el error de Gate B no se repite).
+
+### 7.3 Snapshot y housekeeping
+
 - Snapshot vigente: `beetle-vps-2026-08-19-1641`, 1 de 5 del cupo gratuito.
-- El despliegue automático solo sigue `main`; mientras el Modo 1 viva en
-  `mvp/integracion-modo-1`, el VPS no lo recibe por ese camino y hay que
-  instalarlo a mano (`instalador/install.sh`) para Gate 3.
