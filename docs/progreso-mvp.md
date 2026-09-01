@@ -1,7 +1,16 @@
 # Progreso del MVP — traspaso
 
 **Rama:** `mvp/integracion-modo-1` · **Base:** `gate-d/modo-1` (@MauItu + corrección de Gate C)
-**Corte:** 2026-08-31 · **Suite:** 158 tests en verde (heredados de `gate-d/modo-1`)
+**Corte:** 2026-09-01 · **Suite:** 227 tests en verde
+
+> **Actualización 2026-09-01:** Gates 1-3 del plan de finalización completos
+> (config, detector, monitor, wiring real de main.py, ventana +1 minuto,
+> contrato LLM corregido, identificadores en inglés) y validados en el VPS
+> real (instalación cronometrada, 4 incidentes reales, llamada real a
+> Cloudflare). Gate 4 (Modo 2) tiene el código completo y probado en local;
+> la validación en VPS de su criterio de avance ("<2 min sin intervención
+> humana") queda pendiente por instrucción explícita de no provocar más
+> incidentes ni tocar el VPS hasta que haga falta de verdad. Ver §8.
 
 Este documento existe para que alguien retome sin leer el historial completo.
 Dice qué está hecho, qué está **verificado contra el VPS real** y qué sigue
@@ -22,11 +31,12 @@ inventados (plan-mvp.md §4, regla 10).
 | Gate | Estado | Verificación |
 |---|---|---|
 | A — Base | Hecho por @MauItu | 105 tests |
-| B — Detector | **INVÁLIDA — sin Detector cableado** | Corrida iniciada 2026-08-26, seguía activa al 2026-08-31: 17.040 muestras, 0 transiciones, porque el ejecutable usó `on_snapshot=log_snapshot` y nunca instanció el Detector. Debe detenerse y archivarse como `INVALIDA_SIN_DETECTOR` (Gate 0.2 del plan), no repetirse hasta que el pipeline esté cableado |
+| B — Detector | **Detenida y archivada** | Corrida inválida (2026-08-26 a 2026-09-01, `INVALIDA_SIN_DETECTOR`, §7.1) detenida por protocolo. El Detector real ahora sí está cableado (Gate 2) y corre en el VPS desde 2026-09-01 |
 | C — Evidencia y privacidad | Cerrado | Corpus real del VPS, 0 fugas |
-| D — Modo 1 (hito alfa) | **Código escrito, NO integrado** | El pipeline (`pipeline.py`, `llm.py`, `informe.py`) funciona invocado directamente, pero `doctorjk/main.py` sigue construyendo la app con `on_snapshot=log_snapshot`: nunca corrió como el ejecutable real. No se puede llamar "cerrado" hasta completar Gate 2 del plan de finalización |
-| E — Servicio e instalación | Parcial | Unidades validadas; instalación cronometrada pendiente |
-| F–I | Sin empezar | — |
+| D — Modo 1 (hito alfa) | **Cerrado y validado en VPS real** | `main.py` cablea el pipeline completo; instalación cronometrada, 4 incidentes reales detectados/diagnosticados/resueltos, llamada real a Cloudflare confirmada (§7.2) |
+| E — Servicio e instalación | Cerrado | Unidades validadas, `systemd-analyze verify` limpio, instalación 14.3s, reinstalación idempotente confirmada |
+| F — Modo 2 determinista | **Código completo, validación en VPS pendiente** | `clasificador.py`, `remediador.py`, 4 scripts + `comun.sh`, sudoers exacto, anexado al informe — todo con tests locales en verde. Falta provocar los 4 escenarios básicos en el VPS y medir el "<2 min" del criterio de avance (§8) |
+| G–I | Sin empezar | — |
 
 ---
 
@@ -252,3 +262,43 @@ en el journal, no líneas de muestreo — el error de Gate B no se repite).
 ### 7.3 Snapshot y housekeeping
 
 - Snapshot vigente: `beetle-vps-2026-08-19-1641`, 1 de 5 del cupo gratuito.
+
+---
+
+## 8. Gate 4 — Modo 2 determinista (2026-09-01)
+
+**Código completo y probado en local (227 tests en verde), nada corrido en
+VPS todavía** — por instrucción explícita de no provocar más incidentes ni
+tocar el VPS salvo necesidad real.
+
+| Pieza | Estado |
+|---|---|
+| `doctorjk/clasificador.py` | Mapeo `SignalType` → script (tarea #200), `PORT_DOWN` sin script a propósito |
+| `doctorjk/remediador.py` | Ejecuta con opt-in (`modo_remediacion="scripts"` + `auto_fix`), sanitiza stdout/stderr, nunca lanza |
+| `scripts-fix/comun.sh` + 4 `fix_*.sh` | `bash -n` y `shellcheck -x` limpios (verificado en el VPS por no tener shellcheck local) |
+| `instalador/install.sh` | Copia `scripts-fix/`, genera `/etc/sudoers.d/doctorjk` con 4 rutas exactas (`visudo -cf` antes de instalar), nunca systemctl/shell suelto |
+| `doctorjk/informe.py` | `append_remediation()` anexa el resultado al mismo informe, atómico |
+| `doctorjk/main.py` | Tras cada diagnóstico, si `scripts_dir` está configurado, llama a `remediate()` con `sudo -n` como prefijo real |
+
+**Decisiones tomadas sin fijación previa en el plan, documentadas para revisión:**
+
+- `unidad_memoria_aprobada` (config.toml, nueva clave): sin ella, `fix_memoria.sh`
+  escala en vez de actuar — el plan exigía "unidad aprobada" pero no decía
+  cómo se configura.
+- `fix_disco.sh` **no toca `/tmp`**: en un servidor compartido no hay forma
+  seria de distinguir un archivo temporal huérfano de uno en uso ajeno sin
+  una política más fina que el producto no ha definido. Solo vacía journal
+  (100M) y logs rotados de más de 3 días bajo `/var/log`.
+- Los scripts corren como root vía `sudo -n <ruta-exacta>`, no
+  `systemctl`/`find` sueltos dentro de un script sin privilegios: es lo que
+  permite que `doctorjk` (usuario sin privilegios) ejecute exactamente esos
+  4 archivos ya vetted, nada más.
+
+**Pendiente, no hecho a propósito:**
+
+- Provocar los 4 escenarios básicos con `auto_fix=true` en el VPS y medir
+  el criterio de avance real de la tarea #199 ("disco lleno se resuelve en
+  <2 minutos sin intervención humana").
+- `fix_memoria.sh` no tiene una unidad aprobada configurada todavía en el
+  VPS (`unidad_memoria_aprobada = ""`): antes de probarlo hay que decidir
+  qué unidad real del VPS es segura de reiniciar para ese fin.
