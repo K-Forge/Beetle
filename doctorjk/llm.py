@@ -81,9 +81,9 @@ def _cache_key(config: LLMConfig, prompt: str, evidence: SanitizedEvidence) -> s
 def _cache_read(config: LLMConfig, key: str) -> str | None:
     if not config.cache_enabled or config.cache_dir is None:
         return None
-    archivo = config.cache_dir / f"{key}.txt"
+    file = config.cache_dir / f"{key}.txt"
     try:
-        return archivo.read_text(encoding="utf-8")
+        return file.read_text(encoding="utf-8")
     except FileNotFoundError:
         return None
     except OSError as error:
@@ -92,7 +92,7 @@ def _cache_read(config: LLMConfig, key: str) -> str | None:
         return None
 
 
-def _cache_write(config: LLMConfig, key: str, contenido: str) -> None:
+def _cache_write(config: LLMConfig, key: str, content: str) -> None:
     # La caché guarda diagnósticos ya redactados con evidencia sanitizada,
     # pero igual queda en disco sin cifrar: 700/600 para que solo el usuario
     # doctorjk pueda leerla (plan-finalizacion-mvp.md Gate 2.3, punto 7).
@@ -100,57 +100,57 @@ def _cache_write(config: LLMConfig, key: str, contenido: str) -> None:
         return
     try:
         config.cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        archivo = config.cache_dir / f"{key}.txt"
-        archivo.write_text(contenido, encoding="utf-8")
-        archivo.chmod(0o600)
+        file = config.cache_dir / f"{key}.txt"
+        file.write_text(content, encoding="utf-8")
+        file.chmod(0o600)
     except OSError as error:
         log.warning("no pude escribir la caché: %s", error)
 
 
 # ------------------------------------------------------- validación de respuesta
 
-def _extraer_contenido(respuesta: _Response) -> str:
+def _extract_content(response: _Response) -> str:
     """Valida la forma de la respuesta y devuelve el texto del mensaje.
 
     Una respuesta con 200 pero cuerpo roto, vacío o sin `content` es tan
     inservible como un 500, así que se trata como error reintentable.
     """
     try:
-        cuerpo = respuesta.json()
+        body = response.json()
     except (ValueError, json.JSONDecodeError) as error:
         raise LLMError(f"respuesta no es JSON válido: {error}") from error
 
-    if not isinstance(cuerpo, dict):
+    if not isinstance(body, dict):
         raise LLMError("respuesta JSON no es un objeto")
 
-    opciones = cuerpo.get("choices")
-    if not isinstance(opciones, list) or not opciones:
+    choices = body.get("choices")
+    if not isinstance(choices, list) or not choices:
         raise LLMError("respuesta sin 'choices'")
 
-    mensaje = opciones[0].get("message") if isinstance(opciones[0], dict) else None
-    if not isinstance(mensaje, dict):
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    if not isinstance(message, dict):
         raise LLMError("respuesta sin 'message'")
 
-    contenido = mensaje.get("content")
-    if not isinstance(contenido, str) or not contenido.strip():
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
         raise LLMError("respuesta con contenido vacío")
 
-    return contenido.strip()
+    return content.strip()
 
 
 # ------------------------------------------------------------------ fallback
 
-def build_fallback(evidence: SanitizedEvidence, motivo: str) -> Diagnosis:
+def build_fallback(evidence: SanitizedEvidence, reason: str) -> Diagnosis:
     """Informe mínimo con los hechos disponibles cuando el proveedor no responde.
 
     No inventa causa raíz: dice qué se sabe y qué no. Es preferible a no
     entregar nada, porque la evidencia recolectada sigue siendo útil para
     quien opera el servidor (plan-mvp.md D1, paso 7).
     """
-    lineas = [
+    lines = [
         "# Diagnóstico no disponible",
         "",
-        f"No se pudo obtener un diagnóstico del modelo: {motivo}.",
+        f"No se pudo obtener un diagnóstico del modelo: {reason}.",
         "",
         "Este informe se generó localmente y **no contiene análisis de causa raíz**.",
         "La evidencia recolectada se incluye abajo para revisión manual.",
@@ -159,12 +159,12 @@ def build_fallback(evidence: SanitizedEvidence, motivo: str) -> Diagnosis:
         f"- Evidencia recolectada: {evidence.generated_at.isoformat()}",
     ]
     if evidence.partial_errors:
-        lineas.append("- Secciones incompletas: " + ", ".join(evidence.partial_errors))
-    lineas += ["", "## Evidencia sanitizada", "", "```", evidence.text, "```"]
+        lines.append("- Secciones incompletas: " + ", ".join(evidence.partial_errors))
+    lines += ["", "## Evidencia sanitizada", "", "```", evidence.text, "```"]
 
     return Diagnosis(
         incident_id=evidence.incident_id,
-        text="\n".join(lineas),
+        text="\n".join(lines),
         model="fallback-local",
         from_fallback=True,
     )
@@ -186,11 +186,11 @@ def diagnose(
     o con una respuesta rota (plan-finalizacion-mvp.md Gate 2.3, defecto 11).
     La distinción queda en `from_fallback`.
     """
-    clave = _cache_key(config, prompt, evidence)
-    cacheado = _cache_read(config, clave)
-    if cacheado is not None:
-        log.info("usando respuesta cacheada (%s)", clave[:12])
-        return Diagnosis(evidence.incident_id, cacheado, config.model, from_fallback=False)
+    cache_key = _cache_key(config, prompt, evidence)
+    cached = _cache_read(config, cache_key)
+    if cached is not None:
+        log.info("usando respuesta cacheada (%s)", cache_key[:12])
+        return Diagnosis(evidence.incident_id, cached, config.model, from_fallback=False)
 
     payload = {
         "model": config.model,
@@ -204,11 +204,11 @@ def diagnose(
         "Content-Type": "application/json",
     }
 
-    ultimo_motivo = "sin intentos"
+    last_reason = "sin intentos"
     # Un intento inicial más un reintento por cada espera del backoff.
-    for intento in range(len(BACKOFF_SECONDS) + 1):
+    for attempt in range(len(BACKOFF_SECONDS) + 1):
         try:
-            respuesta = session.post(
+            response = session.post(
                 config.base_url, json=payload, headers=headers, timeout=config.timeout_s
             )
         except requests.exceptions.RequestException as error:
@@ -216,38 +216,38 @@ def diagnose(
             # tests, pero en producción SIEMPRE es un requests.Session real
             # (main.py la construye así); esta es la jerarquía concreta que
             # ese cliente lanza ante timeout, conexión rechazada, DNS, etc.
-            ultimo_motivo = f"error de red: {type(error).__name__}"
-            log.warning("intento %s falló: %s", intento + 1, ultimo_motivo)
+            last_reason = f"error de red: {type(error).__name__}"
+            log.warning("intento %s falló: %s", attempt + 1, last_reason)
         else:
-            estado = respuesta.status_code
-            if estado in (401, 403):
+            status = response.status_code
+            if status in (401, 403):
                 # Credencial mala: reintentar solo gasta cuota y tiempo. No se
                 # propaga -- el agente igual debe entregar un informe
                 # (fallback), no quedarse en silencio (defecto 11).
-                ultimo_motivo = f"el proveedor rechazó la credencial (HTTP {estado})"
-                log.warning(ultimo_motivo)
+                last_reason = f"el proveedor rechazó la credencial (HTTP {status})"
+                log.warning(last_reason)
                 break
-            if 400 <= estado < 500 and estado not in _RETRYABLE_STATUS:
-                ultimo_motivo = f"petición inválida (HTTP {estado})"
-                log.warning(ultimo_motivo)
+            if 400 <= status < 500 and status not in _RETRYABLE_STATUS:
+                last_reason = f"petición inválida (HTTP {status})"
+                log.warning(last_reason)
                 break
-            if estado in _RETRYABLE_STATUS:
-                ultimo_motivo = f"HTTP {estado}"
-                log.warning("intento %s falló: %s", intento + 1, ultimo_motivo)
+            if status in _RETRYABLE_STATUS:
+                last_reason = f"HTTP {status}"
+                log.warning("intento %s falló: %s", attempt + 1, last_reason)
             else:
                 try:
-                    contenido = _extraer_contenido(respuesta)
+                    content = _extract_content(response)
                 except LLMError as error:
-                    ultimo_motivo = str(error)
-                    log.warning("intento %s falló: %s", intento + 1, ultimo_motivo)
+                    last_reason = str(error)
+                    log.warning("intento %s falló: %s", attempt + 1, last_reason)
                 else:
-                    _cache_write(config, clave, contenido)
+                    _cache_write(config, cache_key, content)
                     return Diagnosis(
-                        evidence.incident_id, contenido, config.model, from_fallback=False
+                        evidence.incident_id, content, config.model, from_fallback=False
                     )
 
-        if intento < len(BACKOFF_SECONDS):
-            sleep(BACKOFF_SECONDS[intento])
+        if attempt < len(BACKOFF_SECONDS):
+            sleep(BACKOFF_SECONDS[attempt])
 
-    log.error("agotados los intentos contra el proveedor: %s", ultimo_motivo)
-    return build_fallback(evidence, ultimo_motivo)
+    log.error("agotados los intentos contra el proveedor: %s", last_reason)
+    return build_fallback(evidence, last_reason)
