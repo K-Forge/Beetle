@@ -648,3 +648,46 @@ def test_modo_2_sin_scripts_dir_no_se_ejecuta(tmp_path):
     informes = list(tmp_path.glob("*.md"))
     assert len(informes) == 1
     assert "Corrección automática" not in informes[0].read_text(encoding="utf-8")
+
+
+def test_modo_2_corre_aunque_falle_escribir_el_informe(tmp_path, caplog):
+    # Hallazgo de auditoría #7: un disco lleno que impide guardar el
+    # informe es justo el caso donde más importa que Modo 2 igual actúe --
+    # remediar no debe depender de que save_report() haya tenido éxito.
+    reports_as_file = tmp_path / "informes-rotos"
+    reports_as_file.write_text("esto no es un directorio", encoding="utf-8")
+
+    scripts_dir = tmp_path / "scripts-fix"
+    scripts_dir.mkdir()
+    script = scripts_dir / "fix_servicio.sh"
+    script.write_text("#!/usr/bin/env bash\necho corregido\nexit 0\n", encoding="utf-8")
+    script.chmod(0o755)
+
+    config = _config_de_prueba(
+        reports_as_file,
+        service_cycles=2,
+        remediation_mode=RemediationMode.SCRIPTS,
+        auto_fix=True,
+        dry_run=False,
+    )
+    reloj = {"ahora": datetime(2026, 8, 26, 12, 0, 0, tzinfo=timezone.utc)}
+    procesar, _ = build_incident_pipeline(
+        config,
+        "prompt",
+        _SesionFalsa(),
+        scripts_dir=scripts_dir,
+        now_fn=lambda: reloj["ahora"],
+        remediation_command_prefix=(),
+    )
+
+    t0 = reloj["ahora"]
+    with caplog.at_level("INFO"):
+        procesar(_snapshot_servicio(activo=False, captured_at=t0))
+        reloj["ahora"] = t0 + timedelta(seconds=30)
+        procesar(_snapshot_servicio(activo=False, captured_at=reloj["ahora"]))
+        reloj["ahora"] = t0 + timedelta(seconds=30) + recolector.WINDOW_AFTER
+        procesar(_snapshot_servicio(activo=False, captured_at=t0 + timedelta(seconds=30)))
+
+    assert list(tmp_path.glob("informes-rotos/*.md")) == []  # el informe sí falló
+    assert "Modo 2" in caplog.text  # pero la corrección igual corrió y quedó auditada
+    assert "corregido" in caplog.text

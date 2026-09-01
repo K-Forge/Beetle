@@ -353,14 +353,21 @@ def build_incident_pipeline(
         now = now_fn()
         for pending_incident in pop_due_incidents(pending, now):
             report_path = on_incident(pending_incident.incident, prompt, config.reports_dir, deps, now)
-            if report_path is not None and scripts_dir is not None:
+            # Remediar no depende de que el informe se haya podido escribir
+            # (hallazgo de auditoría #7): un disco lleno que impide guardar
+            # el informe es justo el caso donde más importa que Modo 2 igual
+            # actúe. La falla de persistencia ya quedó en journald por su
+            # cuenta (informe.save_and_rotate); si no hay report_path, la
+            # auditoría de la corrección también solo va a journald.
+            if scripts_dir is not None:
                 resultado = remediador.remediate(
                     pending_incident.incident,
                     config,
                     scripts_dir,
                     command_prefix=remediation_command_prefix,
                 )
-                informe.append_remediation(report_path, resultado)
+                if report_path is not None:
+                    informe.append_remediation(report_path, resultado)
 
     def next_wait(now: datetime) -> float:
         return seconds_until_next_event(pending, effective_interval, now)
