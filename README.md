@@ -38,11 +38,14 @@ y las convenciones que debe respetar.
 
 ## Estado
 
-Fase 1 en curso. `doctorjk/monitor.py` muestrea servicios, disco, memoria, puertos y carga, y
-normaliza esas lecturas a señales (tarea #173). `doctorjk/main.py` es el orquestador de larga
-vida: mantiene el FIFO que conecta con `trigger.sh` y toma una muestra ante cada tick de polling
-o cada señal en tiempo real. Detector, recolector, sanitizador, cliente LLM e informes (Fases
-2–5) todavía no están implementados — ver [docs/plan-mvp.md](docs/plan-mvp.md) para la secuencia.
+Fases 1–6 están **escritas pero no integradas**. `doctorjk/monitor.py` muestrea servicios, disco,
+memoria, puertos y carga y normaliza esas lecturas a señales (tarea #173); `doctorjk/detector.py`,
+`recolector.py`, `sanitizador.py`, `llm.py` e `informe.py` existen y tienen pruebas unitarias en
+verde, pero `doctorjk/main.py` todavía no los conecta: el ejecutable real sigue registrando cada
+muestra en vez de evaluarla con el Detector. Nada de esto está instalado en el VPS de pruebas.
+Ver [docs/plan-finalizacion-mvp.md](docs/plan-finalizacion-mvp.md) para el estado auditado y la
+secuencia vigente hasta v0.1.0 (el histórico [docs/plan-mvp.md](docs/plan-mvp.md) queda
+supersedido).
 
 ## Los tres modos
 
