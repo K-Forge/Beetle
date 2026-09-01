@@ -93,6 +93,9 @@ install -m 0755 "$REPO/doctorjk/trigger.sh" "$PREFIX/doctorjk/trigger.sh"
 install -d -m 0755 "$PREFIX/prompts"
 install -m 0644 "$REPO/prompts/diagnosticador.md" "$PREFIX/prompts/diagnosticador.md"
 install -m 0644 "$REPO/pyproject.toml" "$PREFIX/pyproject.toml"
+# Las unidades systemd apuntan Documentation= acá (defecto 13); sin copiarlo,
+# `systemctl status` ofrece un enlace roto.
+install -m 0644 "$REPO/README.md" "$PREFIX/README.md"
 
 if [[ -x "$PREFIX/venv/bin/python" ]]; then
   info "entorno virtual existente, se reutiliza"

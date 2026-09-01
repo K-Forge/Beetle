@@ -22,7 +22,11 @@ RuntimeDirectoryMode=0750
 
 WorkingDirectory=/opt/doctorjk
 EnvironmentFile=/etc/doctorjk/.env
-ExecStart=/opt/doctorjk/venv/bin/python -m doctorjk.main
+# Rutas explícitas en vez de confiar en los defaults del propio módulo
+# (plan-finalizacion-mvp.md defecto 13): coinciden con lo que install.sh deja
+# hoy, pero una unidad de systemd no debe depender en silencio de que un
+# default de Python nunca cambie.
+ExecStart=/opt/doctorjk/venv/bin/python -m doctorjk.main --config /etc/doctorjk/config.toml --prompt /opt/doctorjk/prompts/diagnosticador.md
 
 # El agente que vigila no puede ser el que se cae en silencio.
 Restart=always
