@@ -1220,7 +1220,31 @@ verificó que el directorio de informes no tiene archivos nuevos). Estado
 final idéntico a la línea base de §9.1. Ningún incidente real se ejecutó,
 ninguna llamada a Cloudflare, ningún `push`/`merge`.
 
-**Pendiente antes de reintentar:** el fix de `comun.sh` corregido este
-intento **todavía no se probó en el VPS real** -- el próximo Paso 0 es la
-primera vez que se ejercita ahí. Retomar desde B2 (ninguno de los 4
-dry-runs directos llegó a completarse) con Fase A repetida desde cero.
+**Segunda P0 encontrada en local, sin volver al VPS, revisando qué seguía
+en el camino de B2 después del fix de arriba:** `read_config_attr` en
+`comun.sh` llamaba `load_config(sys.argv[1])` con el string crudo de
+`argv` -- el mismo bug que `install.sh` ya había corregido en su propio
+paso de validación (`load_config()` exige `Path` y llama
+`path.read_bytes()`). Como los 4 `fix_*.sh` reales llaman a
+`read_config_attr` para `dry_run` como mínimo (y cada uno además para su
+propia allowlist), este bug habría reventado el primer script de B2 con
+`AttributeError` apenas se hubiera corregido el hallazgo de
+`_verify_config_ownership` -- el reintento en el VPS lo habría encontrado
+de inmediato, un paso más adelante del mismo B2. Corregido con
+`Path(sys.argv[1])` e `import Path`, mismo patrón que `install.sh`.
+`rg 'load_config\('` confirma que era el único call site restante con un
+`str` crudo (`main.py` y `install.sh` ya envolvían en `Path()`).
+`test_comun_permisos.py` ahora también corre `read_config_attr` real
+(intérprete real del venv del repo, vía `sys.executable`, no un doble)
+contra un TOML completo y válido: `dry_run`, `disk_pct_threshold`,
+`monitored_ports` y las tres listas nuevas de Gate 4/4.4
+(`monitored_mount_points`, `approved_memory_unit`,
+`approved_port_occupants`). Confirmadas las 6 fallando con el
+`AttributeError` exacto contra el código viejo, pasando las 6 con el fix.
+Suite completa: 303/303 (antes 297, +6).
+
+**Pendiente antes de reintentar:** los dos fixes de `comun.sh` de este
+intento (aritmética octal + `Path()`) **todavía no se probaron juntos en
+el VPS real** -- el próximo Paso 0 es la primera vez que se ejercitan ahí.
+Retomar desde B2 (ninguno de los 4 dry-runs directos llegó a completarse)
+con Fase A repetida desde cero.
