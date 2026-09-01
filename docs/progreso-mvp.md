@@ -477,9 +477,10 @@ tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "sudo /tmp/doctorjk-deploy/ins
 # Fase B con ese backup tumbó doctorjk.service en un crash-loop real
 # (ConfigError: "falta(n) unidad_memoria_aprobada, ocupantes_puerto_aprobados"),
 # exactamente el bug que la migración existe para evitar. El backup correcto
-# es el estado YA migrado -- Gate 3 + las dos claves nuevas con su default
-# fail-closed -- que es también el estado exacto al que debe volver la
-# Fase E.
+# es el estado YA migrado -- Gate 3 + las tres claves nuevas con su default
+# (fail-closed para dos, `["/"]` para puntos_montaje_vigilados -- ver
+# hallazgo 1 de §9.4) -- que es también el estado exacto al que debe
+# volver la Fase E.
 tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
   sudo cp /etc/doctorjk/config.toml /etc/doctorjk/config.toml.bak-gate44
 "
@@ -492,22 +493,24 @@ activas.
 
 **Bloqueante corregido antes de esta versión (2026-09-01), ya en código y
 probado en local:** el `config.toml` real del VPS es de Gate 3 -- nunca
-tuvo `unidad_memoria_aprobada` ni `ocupantes_puerto_aprobados`, las dos
-claves que Gate 4 agregó al esquema (verificado en `git log`:
-`servicios_vigilados`/`puertos_vigilados` ya eran de Gate 3, ambas claves
-nuevas llegaron con los commits de Modo 2, después). Como `install.sh`
+tuvo `unidad_memoria_aprobada`, `ocupantes_puerto_aprobados` ni
+`puntos_montaje_vigilados` (esta última agregada después, tras el hallazgo
+1 de §9.4), las tres claves que Gate 4 y Gate 4.4 agregaron al esquema
+(verificado en `git log`: `servicios_vigilados`/`puertos_vigilados` ya
+eran de Gate 3, las tres nuevas llegaron después). Como `install.sh`
 preserva un `config.toml` existente sin tocarlo, instalar Gate 4 encima
 habría dejado el archivo real del VPS sin esas claves, y `load_config()`
 es estricto -- el primer `systemctl restart doctorjk.service` de este
 mismo Paso 0 habría tumbado el agente con `ConfigError`, sin ningún aviso
 durante la instalación. `install.sh` ahora migra de forma aditiva: si una
-clave del esquema falta, la agrega con su default fail-closed (`""` para
-la unidad de memoria, `[]` para ocupantes de puerto) sin tocar ninguna
-línea existente, y reafirma dueño/modo después. Cubierto con pruebas que
-corren la migración real contra un fixture con el esquema exacto de Gate 3
-(`pruebas/unitarias/test_instalador.py`): agrega ambas claves una sola vez,
-no las duplica en una segunda corrida, y no toca una config que ya las
-tiene. Este Paso 0 ya no necesita ningún paso manual adicional para esto
+clave del esquema falta, la agrega con su default (fail-closed para las
+dos primeras -- `""` y `[]` --, `["/"]` para la tercera, ver §9.2.1) sin
+tocar ninguna línea existente, y reafirma dueño/modo después. Cubierto con
+pruebas que corren la migración real contra un fixture con el esquema
+exacto de Gate 3 (`pruebas/unitarias/test_instalador.py`): agrega las tres
+claves una sola vez, no las duplica en una segunda corrida, y no toca una
+config que ya las tiene. Este Paso 0 ya no necesita ningún paso manual
+adicional para esto
 -- basta con que `install.sh` sea el de esta rama. Además, `install.sh`
 ahora valida el `config.toml` resultante con el `load_config()` real
 (venv recién instalado) antes de tocar sudoers o reiniciar unidades: si la
@@ -532,7 +535,7 @@ en el VPS, con el `install.sh` de **esta misma rama**
 (`mvp/integracion-modo-1`) en el commit que estaba vigente ese día — no
 desde `main`. Ese directorio, si sigue ahí, es el `install.sh` real de
 antes de Gate 4 (sin `scripts-fix/`, con `NoNewPrivileges=true`, sin las
-dos claves nuevas de config). No hay forma de confirmar que sigue ahí sin
+tres claves nuevas de config). No hay forma de confirmar que sigue ahí sin
 tocar el VPS, así que el Paso 0 ahora empieza con un chequeo de solo
 lectura que falla rápido si el supuesto no se sostiene, en vez de
 descubrirlo recién en un rollback real:
@@ -655,27 +658,37 @@ Respaldo ya hecho en el Paso 0. Editar `/etc/doctorjk/config.toml`:
   reiniciaría, pudiendo recrear `port_occupied` en bucle).
 - `disco_pct` → `5` (original respaldado en el Paso 0).
 
-**Bloqueante nuevo, encontrado en ejecución real (2026-09-01), sin
-resolver todavía -- requiere decisión antes del próximo intento:**
-`monitor.py::parse_disk_output()` corre `df` y evalúa `disco_pct` contra
-**todos los mount points reales**, no solo `/` (a diferencia de
-`fix_disco.sh`, que sí está acotado a `/`). En el VPS real, bajar
-`disco_pct` a 5 disparó `disk_full` también en `/boot` (22% de uso real),
-`/boot/efi` (7%) y `/sys/firmware/efi/efivars` (6%) -- tres incidentes no
-planeados, confirmados y diagnosticados (con el stub de LLM) antes de que
-el protocolo llegara a tocar el filler de `/`. Inofensivo en los hechos
-(`dry_run=true`, y `fix_disco.sh` habría escalado igual ante cualquier
-mount que no sea `/`), pero rompe la regla dura de "ningún estado
-intermedio dispara un incidente no planeado" y generó 3 informes/llamadas
-al stub extra sin cuenta. Ningún umbral por debajo de ~25% evita los tres
-mounts reales a la vez, y subir el filler de `/` para cruzar un umbral esa
-alto excede el tope de 4 GiB (harían falta ~32 GiB) -- las dos
-restricciones ya acordadas (filler ≤4 GiB, umbral bajo) son
-estructuralmente incompatibles con que `disco_pct` sea global. Antes de
-reintentar Fase B: decidir si (a) se acepta esto como ruido esperado y se
-documenta+limpia explícitamente (ambas cosas ya inofensivas, solo falta
-declararlo), o (b) se cambia el enfoque de la prueba de disco. No se
-resuelve acá -- es una decisión de protocolo, no un bug de una línea.
+**Bloqueante de la ejecución real anterior (2026-09-01), resuelto en
+código, no en el protocolo (decisión de MauItu):** `monitor.py`
+evaluaba `disco_pct` contra **todos los mount points reales** que reporta
+`df`, no solo `/` (a diferencia de `fix_disco.sh`, que sí está acotado a
+`/`). Bajar `disco_pct` a 5 sin ese filtro disparaba `disk_full` también
+en `/boot`, `/boot/efi` y `efivars` -- ver el intento real fallido en
+§9.4. La solución fue una allowlist nueva en el propio agente,
+`puntos_montaje_vigilados` (clave TOML) / `monitored_mount_points`
+(`AppConfig`), **requerida, no vacía, default `["/"]`** -- `df` se sigue
+leyendo completo (la recolección no cambió), pero `normalize_snapshot()`
+ahora filtra qué mounts producen señal. Con el default de `["/"]`
+(el que trae la migración de `install.sh`, sin que este protocolo tenga
+que tocar la clave para nada), bajar `disco_pct` a 5 en la Fase A **ya
+solo afecta a `/`** -- el bloqueante queda resuelto sin agregar
+complejidad a este paso. Ver `doctorjk/config.py` (`_monitored_mount_points_list`)
+y `doctorjk/monitor.py` (`normalize_snapshot`) para la implementación, y
+la nota de trade-off en el comentario de `AppConfig.monitored_mount_points`:
+un cliente puede agregar otro mount ahí para que Modo 1 lo vigile, pero
+`fix_disco.sh` (Modo 2) sigue acotado a `/` nada más -- ese mount extra
+quedaría diagnosticado, nunca remediado automáticamente.
+
+**Preflight que confirma el filtro (antes de bajar `disco_pct`):**
+
+```bash
+tailscale ssh beetle@beetle-vps.tail1e5d4e.ts.net "
+  sudo grep '^puntos_montaje_vigilados' /etc/doctorjk/config.toml
+"
+# Debe imprimir exactamente puntos_montaje_vigilados = ["/"] -- si no,
+# PARAR antes de tocar disco_pct: bajar el umbral sin el filtro activo
+# reproduce el incidente no planeado de §9.4.
+```
 - `memoria_disponible_mb` → `$(free -m | awk '/^Mem:/{print $7}') - 700`
   calculado en el momento (con ~8.9 GiB libres da un umbral ~8.2 GiB —
   cruzarlo exige que el memhog de 1000 MB acotado por cgroup se sume al uso
@@ -1067,8 +1080,9 @@ borraría igual aunque algo de esto fallara. `.env` nunca se tocó (hallazgo
 mismos 5 chequeos de §9.1 (servicios reales activos, carga, disco ~3%,
 memoria ~8.9 GiB libres, `config.toml` con `modo_remediacion="diagnostico"`,
 `auto_fix=false`, `dry_run=true`, `unidad_memoria_aprobada=""`,
-`ocupantes_puerto_aprobados=[]` como estaba) más `systemctl list-units
---all 'doctorjk-test-*'` vacío o todo `inactive`.
+`ocupantes_puerto_aprobados=[]`, `puntos_montaje_vigilados=["/"]` como
+estaba) más `systemctl list-units --all 'doctorjk-test-*'` vacío o todo
+`inactive`.
 
 ### 9.3 Lo que este protocolo NO hace
 
@@ -1124,6 +1138,15 @@ dos claves migradas en su default, sin unidades `doctorjk-test-*`
 cargadas, sin marcadores en `/run`. Ningún incidente real se ejecutó,
 ninguna llamada a Cloudflare, ningún `push`/`merge`.
 
-**Pendiente antes de reintentar:** decidir el hallazgo 1 de arriba, luego
-retomar desde B2 (los 4 dry-runs directos no llegaron a correrse) con Fase
-A repetida desde cero (nada quedó de pie para reusar).
+**Hallazgo 1 resuelto (2026-09-01, commit `f3c556d`):** se agregó
+`puntos_montaje_vigilados`/`monitored_mount_points` (default `["/"]`,
+requerida, no vacía) y `normalize_snapshot()` ahora filtra por ella --
+ver §9.2.1 para el detalle y el preflight que lo confirma. El hallazgo 2
+(orden del backup) ya estaba resuelto en el protocolo antes de este
+intento (§9.2.0).
+
+**Pendiente antes de reintentar:** retomar desde B2 (los 4 dry-runs
+directos no llegaron a correrse) con Fase A repetida desde cero (nada
+quedó de pie para reusar). El código nuevo (allowlist de mounts,
+migración de 3 claves, validación con `-I`) todavía no se probó en el VPS
+real -- el próximo Paso 0 lo ejercita por primera vez ahí.
