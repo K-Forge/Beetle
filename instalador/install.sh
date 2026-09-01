@@ -124,7 +124,11 @@ chmod -R go-w "$PREFIX"
 step "Configuracion"
 
 if [[ -f "$CONFIG_DIR/config.toml" ]]; then
-  info "config.toml ya existe, se conserva sin cambios"
+  # "Sin cambios" ya no es exacto (hallazgo de auditoría, 2026-09-01): la
+  # migración de abajo SÍ puede agregarle líneas si le faltan claves
+  # nuevas. Lo que nunca cambia son las decisiones ya tomadas por el
+  # cliente -- ninguna línea existente se toca ni se reordena.
+  info "config.toml ya existe: se conservan sus decisiones, solo se agregan claves nuevas si faltan"
 else
   install -m 0640 -o root -g "$SERVICE_USER" \
     "$REPO/instalador/config.toml.example" "$CONFIG_DIR/config.toml"
@@ -170,6 +174,27 @@ _migrar_clave_config_faltante "ocupantes_puerto_aprobados" 'ocupantes_puerto_apr
 # correctos siempre.
 chown root:"$SERVICE_USER" "$CONFIG_DIR/config.toml"
 chmod 0640 "$CONFIG_DIR/config.toml"
+
+# Validación real tras la migración (hallazgo de auditoría, 2026-09-01):
+# la migración de arriba agrega claves por texto, sin pasar nunca por el
+# parser -- un config.toml que ya viniera mal formado, o con una
+# combinación inválida (auto_fix y dry_run ambos true), seguiría sin
+# detectarse hasta el primer restart real del servicio. Se valida ACÁ, con
+# el mismo load_config() que usa el agente y el venv recién instalado (ya
+# tiene el paquete doctorjk, paso 3), ANTES de tocar sudoers o unidades de
+# systemd: si no carga, el instalador aborta dejando el proceso anterior
+# (si lo había) corriendo sin tocar, en vez de reiniciarlo con una config
+# rota.
+step "Validando config.toml"
+if ! "$PREFIX/venv/bin/python3" -c '
+import sys
+from pathlib import Path
+from doctorjk.config import load_config
+load_config(Path(sys.argv[1]))
+' "$CONFIG_DIR/config.toml"; then
+  fatal "config.toml no es válida (ver el error de arriba) -- no se toca el servicio existente"
+fi
+info "config.toml válida"
 
 if [[ -f "$CONFIG_DIR/.env" ]]; then
   info ".env ya existe, se conserva sin cambios"

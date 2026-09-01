@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 from doctorjk.config import load_config
@@ -245,3 +246,79 @@ def test_migracion_no_toca_una_config_que_ya_tiene_ambas_claves(tmp_path: Path):
     config = load_config(ruta)
     assert config.approved_memory_unit == "appcarga.service"
     assert config.approved_port_occupants == ("appcarga.service",)
+
+
+# ------------------------------------- validación real de config.toml antes
+# ------------------------------------- de tocar sudoers/unidades de systemd
+#
+# Hallazgo de auditoría (2026-09-01): la migración de arriba agrega texto,
+# pero nunca pasa por el parser -- un config.toml mal formado o con una
+# combinación inválida (auto_fix y dry_run ambos true) seguía sin
+# detectarse hasta el primer restart real. install.sh ahora corre
+# load_config() de verdad, con el venv recién instalado, antes de instalar
+# sudoers o unidades y antes de cualquier `systemctl restart` -- si falla,
+# aborta con `fatal` (exit 1) sin haber tocado el servicio anterior.
+
+
+def _extraer_validacion_config() -> str:
+    match = re.search(
+        r"if ! \"\$PREFIX/venv/bin/python3\" -c '\n(.*?)\n' \"\$CONFIG_DIR/config\.toml\"; then",
+        INSTALL_SH,
+        re.DOTALL,
+    )
+    assert match is not None, "no encontré el bloque de validación de config.toml en install.sh"
+    return match.group(1)
+
+
+def _validar_config(config_path: Path) -> subprocess.CompletedProcess[str]:
+    # Corre el código Python REAL extraído de install.sh -- con el
+    # intérprete de este entorno de pruebas, que también tiene `doctorjk`
+    # instalado, no una reimplementación de prueba.
+    return subprocess.run(
+        [sys.executable, "-c", _extraer_validacion_config(), str(config_path)],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+
+def test_install_sh_valida_config_antes_de_instalar_unidades():
+    # Chequeo estático de orden: la validación tiene que estar en el texto
+    # ANTES de instalar unidades y de cualquier systemctl restart real --
+    # si install.sh se reordenara mal, esto lo detecta sin necesitar root.
+    pos_validacion = INSTALL_SH.index('step "Validando config.toml"')
+    pos_unidades = INSTALL_SH.index('step "Instalando unidades de systemd"')
+    pos_restart = INSTALL_SH.index("systemctl restart doctorjk.service")
+    assert pos_validacion < pos_unidades < pos_restart
+
+
+def test_install_sh_validacion_aborta_con_fatal():
+    despues_de_la_validacion = INSTALL_SH[INSTALL_SH.index('step "Validando config.toml"') :]
+    assert 'fatal "config.toml no es válida' in despues_de_la_validacion
+
+
+def test_install_sh_valida_config_gate3_migrada_carga_ok(tmp_path: Path):
+    # Camino feliz: Gate 3 + la migración real (arriba) produce algo que
+    # load_config() sí acepta.
+    ruta = tmp_path / "config.toml"
+    ruta.write_text(_GATE3_FIXTURE_TOML, encoding="utf-8")
+    assert _correr_migracion(ruta).returncode == 0
+
+    resultado = _validar_config(ruta)
+    assert resultado.returncode == 0, resultado.stdout + resultado.stderr
+
+
+def test_install_sh_valida_config_invalida_falla_sin_reiniciar(tmp_path: Path):
+    # Config inválida incluso después de migrar (disco_pct fuera de rango):
+    # la validación debe fallar -- es lo que evita que install.sh llegue a
+    # systemctl restart con una config rota.
+    contenido_invalido = _GATE3_FIXTURE_TOML.replace("disco_pct = 90", "disco_pct = 150") + (
+        'unidad_memoria_aprobada = ""\n'
+        'ocupantes_puerto_aprobados = []\n'
+    )
+    ruta = tmp_path / "config.toml"
+    ruta.write_text(contenido_invalido, encoding="utf-8")
+
+    resultado = _validar_config(ruta)
+    assert resultado.returncode != 0
+    assert "disco_pct" in resultado.stderr
