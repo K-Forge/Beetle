@@ -130,13 +130,44 @@ else
     "$REPO/instalador/config.toml.example" "$CONFIG_DIR/config.toml"
   info "config.toml creado desde la plantilla"
 fi
-# Aunque ya existiera, se reafirman dueño y permisos sin tocar el contenido
-# (hallazgo de auditoría, 2026-09-01): comun.sh ahora falla cerrado si
-# config.toml no es exactamente root-owned y no escribible por grupo/otros
-# (defensa contra fabricar la política que ve un script que corre como
-# root, hallazgo #1-bis) -- si algo dejó esos permisos mal en una
-# reinstalación anterior, Modo 2 se rompería en silencio hasta que alguien
-# lo notara a mano. Reinstalar debe dejarlos correctos siempre.
+# Migración aditiva de claves nuevas (hallazgo de auditoría, 2026-09-01):
+# Gate 4 agregó claves a config.toml (unidad_memoria_aprobada,
+# ocupantes_puerto_aprobados) que un config.toml de una instalación previa
+# a Gate 4 no tiene. load_config() es estricto -- cualquier clave del
+# esquema ausente del archivo se rechaza (CONTEXTO-IA.md §8.1, "fail
+# fast") -- así que sin esto, reinstalar Gate 4 sobre una config.toml
+# vieja deja el archivo tal cual (rama de arriba, "se conserva sin
+# cambios") y el primer restart de doctorjk.service revienta con
+# ConfigError, sin ningún aviso previo durante la instalación misma.
+#
+# Trade-off asumido: el default agregado es SIEMPRE el más restrictivo
+# (fail-closed) de cada clave -- "" para la unidad de memoria, "[]" para
+# ocupantes de puerto -- nunca una suposición sobre qué unidad sería
+# segura de reiniciar o detener en la máquina del cliente. Eso es una
+# decisión de producto que solo el cliente puede tomar editando
+# config.toml después; la migración no la toma por él. Cada clave se
+# agrega SOLO si falta (grep exacto antes de escribir), nunca se
+# sobrescribe ni se reordena una línea existente, y correr esto dos veces
+# no duplica nada -- la segunda vez el grep ya la encuentra.
+step "Migrando config.toml (claves nuevas desde la última instalación, si faltan)"
+_migrar_clave_config_faltante() {
+  local clave="$1" linea_default="$2"
+  if ! grep -qE "^[[:space:]]*${clave}[[:space:]]*=" "$CONFIG_DIR/config.toml"; then
+    printf '\n# Migrado por install.sh (Gate 4, %s): ausente en una instalación previa, default fail-closed.\n%s\n' \
+      "$(date -u +%Y-%m-%d)" "$linea_default" >> "$CONFIG_DIR/config.toml"
+    info "config.toml: agregada '$clave' (no existía -- config de una versión anterior)"
+  fi
+}
+_migrar_clave_config_faltante "unidad_memoria_aprobada" 'unidad_memoria_aprobada = ""'
+_migrar_clave_config_faltante "ocupantes_puerto_aprobados" 'ocupantes_puerto_aprobados = []'
+# Aunque ya existiera (o se acabe de migrar), se reafirman dueño y
+# permisos sin tocar el contenido (hallazgo de auditoría, 2026-09-01):
+# comun.sh ahora falla cerrado si config.toml no es exactamente root-owned
+# y no escribible por grupo/otros (defensa contra fabricar la política que
+# ve un script que corre como root, hallazgo #1-bis) -- si algo dejó esos
+# permisos mal en una reinstalación anterior, Modo 2 se rompería en
+# silencio hasta que alguien lo notara a mano. Reinstalar debe dejarlos
+# correctos siempre.
 chown root:"$SERVICE_USER" "$CONFIG_DIR/config.toml"
 chmod 0640 "$CONFIG_DIR/config.toml"
 

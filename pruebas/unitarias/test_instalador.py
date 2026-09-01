@@ -12,7 +12,10 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
+
+from doctorjk.config import load_config
 
 REPO_ROOT = Path(__file__).parent.parent.parent
 DOCTORJK_SERVICE = (REPO_ROOT / "instalador" / "doctorjk.service").read_text(encoding="utf-8")
@@ -107,3 +110,138 @@ def test_install_sh_reafirma_permisos_de_config_toml_en_cada_corrida():
     despues_del_bloque = match.group(1)
     assert re.search(r'chown\s+root:"?\$SERVICE_USER"?\s+"\$CONFIG_DIR/config\.toml"', despues_del_bloque)
     assert re.search(r'chmod\s+0640\s+"\$CONFIG_DIR/config\.toml"', despues_del_bloque)
+
+
+# ------------------------------------------- migración aditiva de config.toml
+#
+# Hallazgo de auditoría (2026-09-01): install.sh preserva config.toml
+# existente sin tocarlo ("se conserva sin cambios"), pero Gate 4 agregó
+# claves nuevas al esquema (unidad_memoria_aprobada, luego
+# ocupantes_puerto_aprobados) que un config.toml de antes de Gate 4 no
+# tiene -- verificado en git log (1cb7698 agrega servicios_vigilados/
+# puertos_vigilados sin ninguna de las dos; 0f333f8, el commit siguiente,
+# agrega recién unidad_memoria_aprobada). Sin migración, reinstalar Gate 4
+# sobre esa config deja el archivo intacto y el primer restart de
+# doctorjk.service revienta con ConfigError -- load_config() es estricto,
+# cualquier clave del esquema ausente se rechaza.
+#
+# Estas pruebas ejecutan la función de migración REAL extraída de
+# install.sh (no una reimplementación de prueba) contra un fixture con el
+# esquema real de Gate 3 -- config.toml sin ninguna de las dos claves --
+# y validan el resultado con el parser real (doctorjk.config.load_config).
+
+_GATE3_FIXTURE_TOML = """\
+intervalo_monitor_s = 30
+ciclos_persistencia = 2
+enfriamiento_ciclos = 2
+disco_pct = 90
+memoria_disponible_mb = 512
+puerto_timeout_s = 60
+servicio_ciclos = 2
+servicios_vigilados = ["nginx.service", "postgresql.service"]
+puertos_vigilados = [
+  { puerto = 80, servicio = "nginx.service" },
+  { puerto = 5432, servicio = "postgresql.service" },
+]
+directorio_informes = "/var/lib/doctorjk/informes"
+modo_remediacion = "diagnostico"
+auto_fix = false
+dry_run = true
+timeout_comando_s = 30
+llm_url = "https://proveedor.example/v1/chat/completions"
+llm_modelo = "gpt-oss-120b"
+llm_timeout_s = 30
+llm_cache = false
+"""
+# A propósito, SIN unidad_memoria_aprobada ni ocupantes_puerto_aprobados:
+# así era el esquema real de Gate 3, antes de que Gate 4 agregara Modo 2.
+
+
+def _extraer_funcion_migracion() -> str:
+    match = re.search(
+        r"_migrar_clave_config_faltante\(\) \{.*?\n\}\n",
+        INSTALL_SH,
+        re.DOTALL,
+    )
+    assert match is not None, "no encontré _migrar_clave_config_faltante en install.sh"
+    return match.group(0)
+
+
+def _extraer_llamadas_migracion() -> str:
+    llamadas = re.findall(r"^_migrar_clave_config_faltante .*$", INSTALL_SH, re.MULTILINE)
+    assert len(llamadas) == 2, f"esperaba 2 llamadas de migración, encontré {len(llamadas)}"
+    return "\n".join(llamadas)
+
+
+def _correr_migracion(config_path: Path) -> subprocess.CompletedProcess[str]:
+    # info()/step() son no-op: install.sh real las usa solo para mensajes
+    # de progreso, no afectan el resultado que se está probando.
+    script = f"""#!/usr/bin/env bash
+set -euo pipefail
+CONFIG_DIR="{config_path.parent}"
+info() {{ :; }}
+step() {{ :; }}
+{_extraer_funcion_migracion()}
+{_extraer_llamadas_migracion()}
+"""
+    return subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, timeout=10
+    )
+
+
+def test_migracion_agrega_claves_gate4_faltantes_a_config_gate3(tmp_path: Path):
+    ruta = tmp_path / "config.toml"
+    ruta.write_text(_GATE3_FIXTURE_TOML, encoding="utf-8")
+    contenido_original = ruta.read_text(encoding="utf-8")
+
+    resultado = _correr_migracion(ruta)
+    assert resultado.returncode == 0, resultado.stdout + resultado.stderr
+
+    contenido_migrado = ruta.read_text(encoding="utf-8")
+    assert contenido_original in contenido_migrado, "no debe tocar ninguna línea existente"
+    assert 'unidad_memoria_aprobada = ""' in contenido_migrado
+    assert "ocupantes_puerto_aprobados = []" in contenido_migrado
+
+    config = load_config(ruta)
+    assert config.approved_memory_unit == ""
+    assert config.approved_port_occupants == ()
+
+
+def test_migracion_es_idempotente_no_duplica_en_dos_corridas(tmp_path: Path):
+    ruta = tmp_path / "config.toml"
+    ruta.write_text(_GATE3_FIXTURE_TOML, encoding="utf-8")
+
+    primera = _correr_migracion(ruta)
+    assert primera.returncode == 0, primera.stdout + primera.stderr
+    tras_primera = ruta.read_text(encoding="utf-8")
+
+    segunda = _correr_migracion(ruta)
+    assert segunda.returncode == 0, segunda.stdout + segunda.stderr
+    tras_segunda = ruta.read_text(encoding="utf-8")
+
+    assert tras_primera == tras_segunda, "una segunda corrida no debe cambiar nada más"
+    assert tras_segunda.count("unidad_memoria_aprobada") == 1
+    assert tras_segunda.count("ocupantes_puerto_aprobados") == 1
+
+    config = load_config(ruta)
+    assert config.approved_memory_unit == ""
+    assert config.approved_port_occupants == ()
+
+
+def test_migracion_no_toca_una_config_que_ya_tiene_ambas_claves(tmp_path: Path):
+    # Con valores no-default a propósito: si la migración las pisara con
+    # el default, este test lo detectaría.
+    contenido = _GATE3_FIXTURE_TOML + (
+        'unidad_memoria_aprobada = "appcarga.service"\n'
+        'ocupantes_puerto_aprobados = ["appcarga.service"]\n'
+    )
+    ruta = tmp_path / "config.toml"
+    ruta.write_text(contenido, encoding="utf-8")
+
+    resultado = _correr_migracion(ruta)
+    assert resultado.returncode == 0, resultado.stdout + resultado.stderr
+    assert ruta.read_text(encoding="utf-8") == contenido, "no debe agregar ni pisar nada"
+
+    config = load_config(ruta)
+    assert config.approved_memory_unit == "appcarga.service"
+    assert config.approved_port_occupants == ("appcarga.service",)
