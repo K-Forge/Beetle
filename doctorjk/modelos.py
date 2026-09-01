@@ -217,3 +217,39 @@ class Evidence:
     history_text: str
     raw_text: str
     partial_errors: tuple[str, ...]
+
+
+class RemediationOutcome(str, Enum):
+    """Resultado de intentar corregir un incidente en Modo 2 (tareas #201, #202).
+
+    `remediador.py` es el único que decide este valor; ni el script bash ni
+    el clasificador lo asignan. NOT_MAPPED y NOT_ENABLED no ejecutan ningún
+    comando -- se distinguen de FAILED porque ninguno es un intento fallido,
+    es que el intento nunca correspondía.
+    """
+
+    RESOLVED = "resolved"  # el script corrió y su propia verificación pasó
+    FAILED = "failed"  # el script corrió pero no verificó resuelto: escalar
+    NOT_MAPPED = "not_mapped"  # el tipo de incidente no tiene script (#200)
+    NOT_ENABLED = "not_enabled"  # modo_remediacion != "scripts"
+
+
+@dataclass(frozen=True)
+class RemediationResult:
+    """Bitácora de auditoría de un intento de corrección Modo 2 (tarea #201).
+
+    Todo lo que un administrador necesita para reconstruir qué se ejecutó,
+    cuándo, y qué devolvió -- stdout/stderr ya vienen sanitizados por quien
+    construye este resultado, nunca crudos (CONTEXTO-IA.md §8.5).
+    """
+
+    incident_id: str
+    signal_type: SignalType
+    script: str | None
+    argv: tuple[str, ...]
+    started_at: datetime
+    finished_at: datetime
+    exit_code: int | None
+    stdout: str
+    stderr: str
+    outcome: RemediationOutcome
