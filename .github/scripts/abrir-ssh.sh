@@ -20,6 +20,13 @@ PREFIJO="SSH gestionado:"   # marca las reglas que este script administra
 
 die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
+# shellcheck source=.github/scripts/comun.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/comun.sh"
+
+# Sin esto, correrlo donde no hay CLI daba un error de OCI a medio camino en
+# vez de decir cual es el problema.
+exigir_oci
+
 SL=$(oci network subnet get --subnet-id "$SUBNET" --query 'data."security-list-ids"[0]' --raw-output) \
   || die "no pude leer la subred. Revisa las credenciales de OCI."
 

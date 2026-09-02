@@ -16,8 +16,14 @@ LIMITE_GRATIS=5
 
 die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
-TENANCY="${OCI_TENANCY_OCID:-$(awk -F= '/^tenancy/{print $2; exit}' "${OCI_CLI_CONFIG_FILE:-$HOME/.oci/config}" 2>/dev/null | tr -d ' \r')}"
-[[ -n "$TENANCY" ]] || die "no pude determinar el tenancy OCID."
+# shellcheck source=.github/scripts/comun.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/comun.sh"
+
+# Antes que nada, y tambien para los modos de solo lectura: si este equipo no
+# puede hablar con Oracle hay que decirlo con un mensaje que nombre la causa,
+# no morir a mitad de camino.
+exigir_oci
+TENANCY="$(resolver_tenancy)"
 
 # Solo cuentan los que ocupan espacio; los TERMINATED ya no.
 contar() {

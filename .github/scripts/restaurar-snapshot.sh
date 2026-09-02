@@ -41,10 +41,16 @@ on_error() {
   printf '        --availability-domain %s\n' "$AD"                     >&2
   printf '=========================================================\n' >&2
 }
-trap on_error ERR
+# OJO: el trap NO se arma aqui. Armarlo antes de los modos de solo lectura
+# hacia que `--listar` y `--verificar` mostraran un cartel de "RESTAURACION
+# INTERRUMPIDA" sin que hubiera ninguna restauracion en curso, lo cual alarma
+# sin motivo. Se arma abajo, justo antes del primer paso que toca algo.
 
-TENANCY="${OCI_TENANCY_OCID:-$(awk -F= '/^tenancy/{print $2; exit}' "${OCI_CLI_CONFIG_FILE:-$HOME/.oci/config}" 2>/dev/null | tr -d ' \r')}"
-[[ -n "$TENANCY" ]] || die "no pude determinar el tenancy OCID. Exporta OCI_TENANCY_OCID."
+# shellcheck source=.github/scripts/comun.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/comun.sh"
+
+exigir_oci
+TENANCY="$(resolver_tenancy)"
 
 # ---------------------------------------------------------------- verificacion
 # Los nombres de subcomando y de flag del OCI CLI no son adivinables, y un typo
@@ -133,6 +139,9 @@ fi
 # Se termina con --preserve-boot-volume false a proposito: el disco viejo ocupa
 # 150 GB de los 200 GB gratuitos, y sin liberarlos no cabe el nuevo. El backup ya
 # esta verificado como AVAILABLE, asi que el punto de restauracion esta a salvo.
+# A partir de aqui si se toca el servidor: ahora el trap tiene sentido.
+trap on_error ERR
+
 PASO_ACTUAL="terminar la instancia vieja"
 log "1/4 Terminando la instancia vieja y su boot volume..."
 oci compute instance terminate --instance-id "$INST" --force --preserve-boot-volume false \
