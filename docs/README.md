@@ -14,6 +14,7 @@ docs/
 ├── plan-mvp.md                       # secuencia ejecutable y gates del MVP v0.1
 ├── links.md                         # enlaces de trabajo del equipo
 ├── runbook-restore.md               # cómo restaurar el VPS desde snapshot (#168)
+├── runbook-snapshots.md             # crear/listar snapshots y dónde los guarda Oracle
 ├── arquitectura.md                  # (pendiente) detalle técnico para quien toque el código
 └── sanitizador_limitaciones.md      # qué NO cubre la sanitización (#185)
 ```
@@ -28,6 +29,7 @@ docs/
 | [plan-mvp.md](plan-mvp.md) | Auditoría del estado y plan secuencial del MVP v0.1, con dependencias, pruebas y gates de salida |
 | [links.md](links.md) | Canva, formularios y repositorios de referencia |
 | [runbook-restore.md](runbook-restore.md) | Restauración del VPS: procedimiento, quién puede ejecutarla, política de snapshots y el gotcha de Tailscale |
+| [runbook-snapshots.md](runbook-snapshots.md) | Crear y listar snapshots, dónde los guarda Oracle, y qué hacer si un script falla |
 | [sanitizador_limitaciones.md](sanitizador_limitaciones.md) | Seis escenarios que el sanitizador por patrones NO cubre, con su riesgo residual (tarea #185) |
 
 ## Qué falta escribir
